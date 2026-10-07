@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker.ImportScripts"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["app/src/*"], "next/navigation": ["app/shims/next-navigation.ts"], "next/font/google": ["app/shims/next-font.ts"], "next": ["app/shims/next.ts"] }
+  },
+  "include": ["server", "app", "test", "scripts/*.mjs", "app/src/**/*.d.ts"]
+}

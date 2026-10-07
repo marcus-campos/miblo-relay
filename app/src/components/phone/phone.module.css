@@ -1,0 +1,2077 @@
+/* The phone app. Colours come from the site tokens (globals.css): amber = needs you,
+   green = working, blue = done, the grey ink = idle, the same signals the device uses.
+   App chrome: a top bar, the content, a bottom tab bar; a conversation is its own screen with a
+   sticky bar and a reply box pinned to the bottom. Every fixed edge respects the safe areas. */
+
+.app {
+  --tabbar-h: 4rem;
+  --col: 40rem;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+}
+.app button,
+.app summary,
+.app a {
+  touch-action: manipulation;
+}
+
+/* --- top bar ------------------------------------------------------------------------------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: env(safe-area-inset-top);
+  background: color-mix(in oklab, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+}
+.topbarInner {
+  max-width: var(--col);
+  margin-inline: auto;
+  height: 3.5rem;
+  padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.topbarTitle {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+.menuBox {
+  position: relative;
+}
+.avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+.avatar[data-signed-in="true"] {
+  background: var(--peach);
+  color: var(--peach-ink);
+  border-color: transparent;
+}
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  min-width: 13rem;
+  padding: 0.35rem;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+  z-index: 30;
+}
+.menu a {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 0.85rem;
+  border-radius: 10px;
+  font-weight: 700;
+}
+.menu a:hover,
+.menu a:focus-visible {
+  background: var(--bg-2);
+}
+
+/* --- content and bottom tabs ---------------------------------------------------------------- */
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: var(--col);
+  margin-inline: auto;
+  padding: 0.25rem max(1rem, env(safe-area-inset-right)) calc(2rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+.content[data-tabs="true"] {
+  padding-bottom: calc(var(--tabbar-h) + 2rem + env(safe-area-inset-bottom));
+}
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-top: 1px solid var(--line);
+}
+.tabbarInner {
+  max-width: var(--col);
+  margin-inline: auto;
+  height: var(--tabbar-h);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+.tabItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  min-height: 2.75rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.tabIcon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+}
+.tabItem[aria-current="page"] {
+  color: var(--ink);
+}
+.tabItem[aria-current="page"] .tabIcon {
+  background: color-mix(in oklab, var(--blue) 24%, transparent);
+}
+.tabCount {
+  position: absolute;
+  top: -0.3rem;
+  right: 0.35rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #141922;
+  font-size: 0.75rem;
+  font-weight: 800;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* Approvals waiting while another tab is open: one tap back to them. */
+.bannerWrap {
+  position: sticky;
+  top: calc(3.5rem + env(safe-area-inset-top));
+  z-index: 19;
+  max-width: var(--col);
+  width: 100%;
+  margin-inline: auto;
+  padding: 0 1rem 0.5rem;
+}
+.waitingBanner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 12px;
+  background: var(--amber);
+  color: #141922;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+}
+
+/* --- shared blocks ------------------------------------------------------------------------ */
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+.sectionCount {
+  min-width: 1.6rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-size: 0.85rem;
+  text-align: center;
+}
+.group {
+  margin-top: 1.5rem;
+}
+.groupTitle {
+  margin: 0 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.groupCard {
+  padding: 1rem;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.footnote {
+  padding: 1.75rem 0.5rem 0;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.hint {
+  margin-top: 0.5rem;
+  font-size: 0.95rem;
+  color: var(--ink-2);
+}
+
+.notice {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.notice[data-tone="warn"],
+.notice[data-tone="bad"] {
+  border: 2px solid var(--amber);
+  background: color-mix(in oklab, var(--amber) 10%, var(--surface));
+}
+.notice[data-tone="ok"] {
+  border: 2px solid var(--green);
+  background: color-mix(in oklab, var(--green) 10%, var(--surface));
+}
+.noticeIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--ink);
+}
+.notice[data-tone="warn"] .noticeIcon,
+.notice[data-tone="bad"] .noticeIcon {
+  background: var(--amber);
+  color: #141922;
+}
+.notice[data-tone="ok"] .noticeIcon {
+  background: var(--green);
+  color: #141922;
+}
+.okDot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-top: 0.1rem;
+  border-radius: 999px;
+  background: var(--green);
+  color: #141922;
+}
+
+/* "For terminal users": folded away, monospace when open. */
+.tech {
+  margin-top: 0.6rem;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.tech > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+.tech > summary::-webkit-details-marker {
+  display: none;
+}
+.techCode {
+  display: block;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.steps {
+  counter-reset: step;
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+.steps > li {
+  counter-increment: step;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  line-height: 1.4;
+}
+.steps > li::before {
+  content: counter(step);
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.steps > li > span {
+  padding-top: 0.15rem;
+}
+.inlineIcon {
+  display: inline-block;
+  margin-right: 0.35rem;
+  vertical-align: -3px;
+}
+
+.disclosure {
+  margin-top: 0.75rem;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3.25rem;
+  padding: 0 1rem;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.disclosureBody {
+  padding: 0 1rem 1rem;
+}
+.chevron {
+  flex: none;
+  color: var(--ink-2);
+}
+.chevronDown {
+  flex: none;
+  color: var(--ink-2);
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+details[open] > summary .chevronDown {
+  transform: rotate(-90deg);
+}
+
+.linkButton {
+  min-height: 2.75rem;
+  color: var(--blue-ink);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.iconButton {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: -0.6rem -0.6rem 0 0;
+  border-radius: 999px;
+  color: var(--ink-2);
+}
+.dangerButton {
+  min-height: 3rem;
+  padding: 0.6rem 1rem;
+  border-radius: 10px;
+  border: 2px solid color-mix(in oklab, #e5484d 70%, var(--line));
+  color: #c4282d;
+  font-weight: 700;
+}
+:global(html[data-theme="dark"]) .dangerButton {
+  color: #ff8a8d;
+}
+@media (prefers-color-scheme: dark) {
+  :global(html:not([data-theme="light"])) .dangerButton {
+    color: #ff8a8d;
+  }
+}
+.currentChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 3rem;
+  padding: 0 0.9rem;
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-weight: 700;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  min-height: 3rem;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.toast {
+  position: fixed;
+  z-index: 50;
+  left: 50%;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(30rem, calc(100% - 2rem));
+  pointer-events: none;
+}
+.toast[data-above="tabs"] {
+  bottom: calc(var(--tabbar-h) + 0.75rem + env(safe-area-inset-bottom));
+}
+.toast[data-above="composer"] {
+  /* In a conversation the composer's height varies (a reason, how to turn it on): the toast goes
+     under the session bar instead. */
+  top: calc(4.5rem + env(safe-area-inset-top));
+  bottom: auto;
+}
+.toast > span {
+  display: block;
+  padding: 0.7rem 1rem;
+  border-radius: 12px;
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 700;
+  text-align: center;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.2);
+  animation: toastIn 0.22s ease-out;
+}
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- the pairing screen ---------------------------------------------------------------------- */
+.illustration {
+  display: block;
+  width: min(100%, 22rem);
+  height: auto;
+  margin: 0.5rem auto 0;
+}
+.illLid {
+  fill: var(--bezel);
+}
+.illScreen {
+  fill: #10141b;
+}
+.illSide {
+  fill: #1b212b;
+}
+.illLine {
+  fill: #2d3541;
+}
+.illActive {
+  fill: var(--amber);
+}
+.illTab {
+  font-family: var(--font-body), system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  fill: #141922;
+}
+.illBase {
+  fill: color-mix(in oklab, var(--bezel) 80%, var(--line));
+}
+.illScan {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pairTitle {
+  margin-top: 1.25rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.75rem;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+.installCard {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.pairPanel {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+/* --- Agora: the compact Miblo card ---------------------------------------------------------- */
+.statusCard {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  text-align: left;
+  transition: box-shadow 0.3s ease;
+}
+.statusCard[data-alert="true"] {
+  border-color: transparent;
+  box-shadow: 0 0 0 3px var(--amber);
+}
+.statusFace {
+  flex: none;
+}
+.thumb {
+  display: grid;
+  place-items: center;
+  width: 5.5rem;
+  height: 5.5rem;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--bezel);
+}
+.thumbScreen {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  background: #080808;
+  overflow: hidden;
+}
+.thumbResting .eyes {
+  width: 2.6rem;
+}
+.thumb[data-offline="true"] .thumbScreen {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.thumb[data-screen="sleep"] .thumbScreen {
+  opacity: 0.6;
+}
+.statusCard[data-stale="true"] .thumb {
+  opacity: 0.55;
+  filter: grayscale(0.8);
+}
+.statusBody {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.statusName {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+.statusName .mibloOnline {
+  font-family: var(--font-body), system-ui, sans-serif;
+  margin-left: 0;
+  font-size: 0.8125rem;
+}
+.statusState {
+  color: var(--ink-2);
+  line-height: 1.3;
+}
+.statusNeeds {
+  color: var(--amber-ink);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.statusNeeds b {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+}
+.statusMore {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+/* The connection line: a square signal dot and words. */
+.link {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  background: var(--ink-2);
+}
+.link[data-tone="ok"] .dot {
+  background: var(--green);
+}
+.link[data-tone="warn"] .dot {
+  background: var(--amber);
+}
+.link[data-tone="warn"] {
+  color: var(--amber-ink);
+  font-weight: 700;
+}
+.link[data-tone="bad"] .dot {
+  background: #e5484d;
+}
+.link[data-tone="bad"] {
+  color: var(--amber-ink);
+  font-weight: 700;
+}
+
+/* Computer switcher (more than one pairing). */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  overflow-x: auto;
+  padding: 0.25rem 0;
+  scrollbar-width: none;
+}
+.tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0.4rem 0.9rem;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--surface);
+}
+.tab[aria-pressed="true"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.tabBadge {
+  min-width: 1.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #141922;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+/* --- sessions: one surface, a signal per row ------------------------------------------------- */
+.sessions {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.session {
+  --signal: var(--ink-2);
+  --signal-ink: var(--ink-2);
+}
+.session + .session {
+  border-top: 1px solid var(--line);
+}
+.session[data-kind="needs"] {
+  --signal: var(--amber);
+  --signal-ink: var(--amber-ink);
+  background: color-mix(in oklab, var(--amber) 10%, var(--surface));
+}
+.session[data-kind="working"] {
+  --signal: var(--green);
+  --signal-ink: var(--green-ink);
+}
+.session[data-kind="done"] {
+  --signal: var(--blue);
+  --signal-ink: var(--blue-ink);
+}
+.sessionButton {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 3.75rem;
+  padding: 0.75rem 0.85rem 0.75rem 1rem;
+  text-align: left;
+}
+button.sessionButton:active {
+  background: color-mix(in oklab, var(--ink) 6%, transparent);
+}
+.sessionDot {
+  flex: none;
+  align-self: stretch;
+  width: 5px;
+  border-radius: 3px;
+  background: var(--signal);
+}
+.session[data-kind="working"] .sessionDot {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+.sessionTop {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.sessionName {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sessionState {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.stateWord {
+  font-weight: 700;
+  color: var(--signal-ink);
+}
+.activity::before {
+  content: " · ";
+}
+.elapsed {
+  flex: none;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  padding: 1.5rem 1rem;
+  border-radius: 16px;
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+.emptyFace {
+  display: grid;
+  place-items: center;
+  width: 4.5rem;
+  height: 3.25rem;
+  margin-bottom: 0.5rem;
+  border-radius: 12px;
+  background: #000;
+  box-shadow: 0 0 0 5px var(--bezel);
+}
+.emptyFace .eyes {
+  width: 2.25rem;
+}
+
+/* Data the computer has not refreshed for a while: dimmed so it never reads as live. */
+.stale {
+  opacity: 0.55;
+  filter: grayscale(0.7);
+}
+
+/* --- Meu Miblo ---------------------------------------------------------------------------- */
+/* The gadget's face: a dark bezel around a black screen. */
+.bezel {
+  margin-top: 0.75rem;
+  background: var(--bezel);
+  border-radius: 26px;
+  padding: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  transition: box-shadow 0.3s ease;
+}
+.bezel[data-alert="true"] {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 0 0 3px var(--amber);
+}
+.glass {
+  background: #000;
+  border-radius: 10px;
+  min-height: 11rem;
+  padding: 0.9rem 1rem 1.1rem;
+  color: #f6c6b8;
+  display: flex;
+  flex-direction: column;
+}
+.host {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1rem;
+  color: #a3adbb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.face {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+.faceText {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.125rem;
+  line-height: 1.25;
+  color: #e9edf2;
+}
+.eyes {
+  width: 5.5rem;
+  height: auto;
+  animation: blink 6s steps(1) infinite;
+}
+@keyframes blink {
+  0%,
+  96% {
+    transform: scaleY(1);
+  }
+  97%,
+  99% {
+    transform: scaleY(0.15);
+  }
+}
+.bezel[data-stale="true"] .glass,
+.bezel[data-stale="true"] .mibloGlass {
+  opacity: 0.6;
+  filter: grayscale(0.8);
+}
+
+.mibloGlass {
+  position: relative;
+  background: #080808; /* the renderer's own screen black: no seam around the canvas */
+  border-radius: 10px;
+  padding: 0.9rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.mibloGlass .host {
+  align-self: stretch;
+}
+.mibloScreen {
+  position: relative;
+  width: min(100%, 15rem);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  transition:
+    opacity 0.4s ease,
+    filter 0.4s ease;
+}
+.mibloCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+.mibloGlass[data-screen="sleep"] .mibloScreen {
+  opacity: 0.6;
+}
+.mibloGlass[data-offline="true"] .mibloScreen {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
+.mibloResting .eyes {
+  width: 6.5rem;
+}
+.mibloUnavailable {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: center;
+  font-size: 0.95rem;
+  color: #a3adbb;
+}
+.mibloNeeds {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: -0.25rem;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.125rem;
+  color: var(--amber);
+}
+.mibloNeedsCount {
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1;
+}
+.mibloMeta {
+  margin-top: 0.85rem;
+  padding: 0 0.25rem;
+}
+.mibloName {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+}
+.mibloTitle {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.mibloLabel {
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.mibloOnline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.mibloOnline[data-online="true"] .dot {
+  background: var(--green);
+}
+.mibloState {
+  margin-top: 0.15rem;
+  color: var(--ink-2);
+}
+.mibloHelp {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--ink);
+}
+.mibloTabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  overflow-x: auto;
+  padding: 0.25rem 0;
+  scrollbar-width: none;
+}
+.tab[aria-selected="true"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.tab[data-offline="true"] {
+  font-weight: 500;
+}
+
+/* Limits: chunky pixel meters. */
+.meter {
+  margin-top: 0.35rem;
+  height: 14px;
+  background: var(--bg-2);
+  border: 2px solid var(--ink);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.meter > span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+.meter[data-tone="mid"] > span {
+  background: var(--amber);
+}
+.meter[data-tone="high"] > span {
+  background: #e5484d;
+}
+.today {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.today > li {
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  font-weight: 700;
+}
+
+/* --- Ajustes ------------------------------------------------------------------------------- */
+.rows > li + li {
+  border-top: 1px solid var(--line);
+}
+.computer > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.5rem;
+  padding: 0.35rem 0;
+  cursor: pointer;
+  list-style: none;
+}
+.computer > summary::-webkit-details-marker {
+  display: none;
+}
+.computerIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+  background: var(--bg-2);
+}
+.computerBody {
+  padding: 0.25rem 0 1rem 3.25rem;
+}
+.fp {
+  font-family: var(--font-mono);
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.rowButton {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 3.25rem;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--line);
+  color: var(--blue-ink);
+  font-weight: 700;
+}
+.rowButton > svg {
+  margin-left: 0.6rem;
+}
+.linkRows > li + li {
+  border-top: 1px solid var(--line);
+}
+.linkRows a {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.25rem;
+  font-weight: 700;
+}
+.linkRows a > svg:last-child {
+  color: var(--ink-2);
+}
+.vault {
+  /* Inside a settings card or a disclosure: no frame of its own. */
+  display: block;
+}
+
+/* --- Miblo+ -------------------------------------------------------------------------------- */
+.plusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: 6px;
+  background: var(--blue);
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.upsell {
+  border: 2px solid var(--blue);
+  border-radius: 16px;
+  padding: 1rem;
+  background: color-mix(in oklab, var(--blue) 8%, var(--surface));
+}
+.enroll {
+  margin-top: 1rem;
+  border: 2px solid var(--blue);
+  border-radius: 16px;
+  padding: 1rem;
+  background: color-mix(in oklab, var(--blue) 6%, var(--surface));
+}
+
+.approval {
+  border: 3px solid var(--amber);
+  border-radius: 16px;
+  padding: 1rem;
+  background: var(--surface);
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--amber) 18%, transparent);
+  /* No glyph (stacked combining marks, an unbreakable run) paints outside the card. */
+  overflow: hidden;
+  contain: paint;
+  overflow-wrap: anywhere;
+}
+.approval[data-done="true"] {
+  border-color: var(--line);
+  box-shadow: none;
+}
+.approvalHead {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+.approvalTool {
+  font-weight: 800;
+  font-size: 1.1875rem;
+  line-height: 1.25;
+}
+.approvalMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.toolChip {
+  flex: none;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.outcome {
+  margin-top: 0.9rem;
+  font-weight: 800;
+}
+.ring {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--amber-ink);
+}
+.ring svg {
+  position: absolute;
+  inset: 0;
+}
+.ringTrack {
+  fill: none;
+  stroke: var(--bg-2);
+  stroke-width: 4;
+}
+.ringFill {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s linear;
+}
+.ring[data-urgent="true"] .ringFill {
+  stroke: #e5484d;
+}
+.ring[data-urgent="true"] {
+  color: #c4282d;
+}
+.ringText {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+.ringDone {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--ink);
+}
+.field {
+  margin-top: 0.75rem;
+  overflow: hidden;
+  contain: paint;
+  overflow-wrap: anywhere;
+}
+.fieldKey {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+/* The command shown in full: wrapped, never cut, never in a scroll box of its own. */
+.code {
+  margin-top: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Each box clips its own ink: nothing in one field can draw over another, or over the title. */
+  overflow: hidden;
+  contain: paint;
+}
+.warn {
+  margin-top: 0.75rem;
+  color: var(--amber-ink);
+  font-weight: 700;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+.actions > button {
+  flex: 1;
+}
+
+/* Approval cards (v4): every character visible, escapes styled apart. */
+.esc {
+  display: inline-block;
+  margin: 0 0.1em;
+  padding: 0 0.2em;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--amber) 30%, var(--surface));
+  color: var(--ink);
+  font-weight: 700;
+}
+.path {
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 2px solid var(--amber);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  overflow: hidden;
+  contain: paint;
+}
+.diffLine {
+  display: block;
+  overflow: hidden;
+  contain: paint;
+}
+.diffLine[data-sign="-"] {
+  background: color-mix(in oklab, #d14 14%, transparent);
+}
+.diffLine[data-sign="+"] {
+  background: color-mix(in oklab, #1a8 14%, transparent);
+}
+/* What the AI wrote about the call: secondary, never mistaken for the command. */
+.aiNote {
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--line);
+  color: var(--ink-2);
+  font-size: 0.875rem;
+  font-style: italic;
+  overflow: hidden;
+  contain: paint;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.endMark {
+  height: 1px;
+}
+
+/* --- a conversation, full screen ------------------------------------------------------------ */
+.sessionScreen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.sessionBar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding-top: env(safe-area-inset-top);
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.sessionBar > .waitingBanner {
+  max-width: calc(var(--col) - 2rem);
+  margin: 0 auto 0.6rem;
+  width: calc(100% - 2rem);
+  display: flex;
+}
+.sessionBarInner {
+  max-width: var(--col);
+  margin-inline: auto;
+  min-height: 3.75rem;
+  padding: 0.4rem max(0.5rem, env(safe-area-inset-right)) 0.4rem max(0.25rem, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.backButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  min-height: 2.75rem;
+  padding: 0 0.6rem 0 0.25rem;
+  border-radius: 10px;
+  color: var(--blue-ink);
+  font-weight: 700;
+}
+.sessionTitle {
+  font-weight: 800;
+  font-size: 1.0625rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sessionSub {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sessionSub[data-kind="needs"] .dot {
+  background: var(--amber);
+}
+.sessionSub[data-kind="working"] .dot {
+  background: var(--green);
+}
+.sessionSub[data-kind="done"] .dot {
+  background: var(--blue);
+}
+.chatBody {
+  flex: 1;
+  width: 100%;
+  max-width: var(--col);
+  margin-inline: auto;
+  padding: 0.75rem max(1rem, env(safe-area-inset-right)) 1.25rem max(1rem, env(safe-area-inset-left));
+}
+.untrusted {
+  margin: 0 auto 0.9rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  text-align: center;
+}
+.chatEmpty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--ink-2);
+}
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.msg {
+  max-width: 88%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 18px 18px 18px 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.msg[data-role="user"],
+.msg[data-role="phone"] {
+  align-self: flex-end;
+  border-radius: 18px 18px 6px 18px;
+  border-color: transparent;
+  background: color-mix(in oklab, var(--blue) 22%, var(--surface));
+}
+.msg[data-role="tool"] {
+  border-radius: 10px;
+  background: transparent;
+  border-style: dashed;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.msgRole {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  margin-bottom: 0.15rem;
+}
+.composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in oklab, var(--surface) 94%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-top: 1px solid var(--line);
+}
+.composerInner {
+  max-width: var(--col);
+  margin-inline: auto;
+  padding: 0.6rem max(1rem, env(safe-area-inset-right)) 0.6rem max(1rem, env(safe-area-inset-left));
+}
+.composerRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+.textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.9rem;
+  max-height: 10.5rem;
+  padding: 0.65rem 0.95rem;
+  border: 2px solid var(--line);
+  border-radius: 22px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.35;
+  resize: none;
+}
+.textarea:focus {
+  border-color: var(--blue);
+  outline: none;
+}
+.sendButton {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  transition: opacity 0.15s ease;
+}
+.sendButton:disabled {
+  opacity: 0.35;
+}
+.composerHint {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.betaChip {
+  flex: none;
+  padding: 0 0.35rem;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.composerStatus {
+  margin-bottom: 0.45rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.composerNote {
+  padding: 0.25rem 0 0.15rem;
+  font-size: 0.95rem;
+  color: var(--ink-2);
+}
+.composerNote + .composerRow {
+  margin-top: 0.4rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eyes,
+  .session[data-kind="working"] .sessionDot,
+  .toast > span {
+    animation: none;
+  }
+  .bezel,
+  .statusCard,
+  .mibloScreen,
+  .ringFill,
+  .tabIcon,
+  .chevronDown {
+    transition: none;
+  }
+}
+
+/* Tablets and wider: a roomier column. */
+@media (min-width: 700px) {
+  .app {
+    --col: 44rem;
+  }
+  .thumb {
+    width: 6.5rem;
+    height: 6.5rem;
+  }
+  .pairTitle {
+    font-size: 2rem;
+  }
+}
+
+/* The computers kept in the account (VaultPanel). */
+.computers > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.computers > li:last-child {
+  border-bottom: 0;
+}
+
+/* --- v6 chat view (ChatView.tsx) ---------------------------------------------------------------- */
+.chatList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.chatSep {
+  align-self: center;
+  margin: 0.6rem 0 0.15rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-2);
+  letter-spacing: 0.01em;
+}
+.bubble {
+  position: relative;
+  max-width: min(92%, 34rem);
+  min-width: 0;
+  align-self: flex-start;
+  padding: 0.6rem 0.85rem 0.4rem;
+  border-radius: 18px 18px 18px 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.bubble[data-mine="true"] {
+  align-self: flex-end;
+  border-radius: 18px 18px 6px 18px;
+  border-color: transparent;
+  background: color-mix(in oklab, var(--blue) 24%, var(--surface));
+}
+.bubbleMeta {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.6875rem;
+  color: var(--ink-2);
+  text-align: right;
+}
+.plain {
+  white-space: pre-wrap;
+}
+.md {
+  min-width: 0;
+}
+.md > * + *,
+.md li > * + * {
+  margin-top: 0.5rem;
+}
+.md ul,
+.md ol {
+  padding-left: 1.25rem;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li + li {
+  margin-top: 0.25rem;
+}
+.md blockquote {
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--line);
+  color: var(--ink-2);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.md del {
+  opacity: 0.75;
+}
+.mdH {
+  font-weight: 800;
+  line-height: 1.3;
+}
+.mdH[data-level="1"] {
+  font-size: 1.125rem;
+}
+.mdH[data-level="2"] {
+  font-size: 1.0625rem;
+}
+.mdH[data-level="3"],
+.mdH[data-level="4"] {
+  font-size: 1rem;
+}
+.mdCode {
+  padding: 0.05rem 0.3rem;
+  border-radius: 6px;
+  background: var(--bg-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+.mdLink {
+  color: var(--blue-ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mdDomain {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.mdImg {
+  font-style: italic;
+  color: var(--ink-2);
+}
+.mdPre {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  overflow: hidden;
+  contain: paint;
+}
+.mdPreHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.3rem 0.2rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.mdPre pre {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+.copyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2rem;
+  padding: 0 0.55rem;
+  border-radius: 8px;
+  font-weight: 700;
+  color: var(--blue-ink);
+}
+.mdTable {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.mdTable table {
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  min-width: 100%;
+}
+.mdTable th,
+.mdTable td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.mdTable th {
+  background: var(--bg-2);
+  font-weight: 700;
+}
+.mdTable tr:last-child td {
+  border-bottom: 0;
+}
+.fold:not([data-open]) .foldBody {
+  max-height: 14rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.foldButton {
+  margin-top: 0.25rem;
+  min-height: 2.25rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--blue-ink);
+}
+.toolRun {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: min(96%, 36rem);
+  min-width: 0;
+}
+.toolCard {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--surface) 55%, transparent);
+  font-size: 0.875rem;
+  min-width: 0;
+}
+.toolCard > summary,
+div.toolCard {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.7rem;
+  list-style: none;
+  cursor: default;
+}
+.toolCard > summary {
+  cursor: pointer;
+}
+.toolCard > summary::-webkit-details-marker {
+  display: none;
+}
+.toolCard[data-err="true"] {
+  border-color: color-mix(in oklab, var(--red) 55%, var(--line));
+}
+.toolIcon {
+  flex: none;
+  width: 1.4rem;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.toolLine {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.toolStats {
+  flex: none;
+  display: inline-flex;
+  gap: 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.toolStats [data-sign="+"] {
+  color: var(--green-ink);
+}
+.toolStats [data-sign="-"] {
+  color: var(--red-ink);
+}
+.toolErr {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--red-ink);
+}
+.toolBody {
+  padding: 0 0.7rem 0.6rem;
+  min-width: 0;
+}
+.toolPaths {
+  margin-bottom: 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.toolLabel {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.toolPre {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: var(--bg);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre;
+  contain: paint;
+}
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+.typingDots {
+  display: inline-flex;
+  gap: 3px;
+}
+.typingDots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: typingDot 1.2s infinite ease-in-out;
+}
+.typingDots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typingDots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typingDot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typingDots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+.jumpPill {
+  /* Inside the composer (sticky): always just above it, whatever its height. */
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 0.75rem);
+  white-space: nowrap;
+  z-index: 25;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 0.875rem;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+}
+.composerOff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.75rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.composerOff > p {
+  flex: 1 1 100%;
+}
+.howTo > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  color: var(--blue-ink);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+.howTo > summary::-webkit-details-marker {
+  display: none;
+}
+.textarea:disabled {
+  opacity: 0.6;
+}
+.stopButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--red) 16%, var(--surface));
+  color: var(--red-ink);
+  font-weight: 800;
+}
+.stopButton:disabled {
+  opacity: 0.6;
+}
+
+/* --- v6 joining through the account and "Nova tarefa" -------------------------------------------- */
+.joinCard {
+  margin-top: 1rem;
+  padding: 1.1rem;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.joinCard > * + * {
+  margin-top: 0.6rem;
+}
+.taskButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.9rem;
+  border-radius: 14px;
+  border: 2px dashed var(--line);
+  color: var(--ink);
+  font-weight: 800;
+}
+.taskSheet {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.taskSheet > * + * {
+  margin-top: 0.8rem;
+}
+.fieldLabel {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.select {
+  width: 100%;
+  min-height: 2.9rem;
+  padding: 0 0.8rem;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 1rem;
+}
+.taskArea {
+  width: 100%;
+  min-height: 6.5rem;
+  padding: 0.7rem 0.85rem;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+.taskArea:focus,
+.select:focus {
+  border-color: var(--blue);
+  outline: none;
+}
+.willRun {
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  background: var(--bg-2);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.willRun code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+}
+.taskRows {
+  display: grid;
+  gap: 0.4rem;
+}
+.taskRow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: left;
+}
+.taskRow[data-state="running"] .dot {
+  background: var(--green);
+}
+.taskRow[data-state="failed"] .dot {
+  background: var(--red);
+}
+.taskRow[data-state="stopped"] .dot {
+  background: var(--amber);
+}
+.taskRow[data-state="done"] .dot {
+  background: var(--blue);
+}

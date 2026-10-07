@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+.wrangler/
+*.sqlite
+*.sqlite-*
+.env
+.dev.vars
+coverage/

@@ -1,0 +1,439 @@
+{
+ "format": 1,
+ "firmware": "1.20.0",
+ "labels": {
+  "section": {
+   "pt": "Bichinho",
+   "en": "Pet"
+  },
+  "pet": {
+   "pt": "Bichinho",
+   "en": "Pet"
+  },
+  "eyes": {
+   "pt": "Olhos",
+   "en": "Eyes"
+  },
+  "head": {
+   "pt": "Cabeça",
+   "en": "Head"
+  },
+  "face": {
+   "pt": "Rosto",
+   "en": "Face"
+  },
+  "neck": {
+   "pt": "Pescoço",
+   "en": "Neck"
+  },
+  "none": {
+   "pt": "Nenhum",
+   "en": "None"
+  },
+  "mascot": {
+   "pt": "Cor",
+   "en": "Colour"
+  },
+  "auto": {
+   "pt": "Automático",
+   "en": "Auto"
+  },
+  "copy": {
+   "pt": "Copiar meu Miblo",
+   "en": "Copy my Miblo"
+  }
+ },
+ "pets": [
+  {
+   "id": 0,
+   "pt": "Gato",
+   "en": "Cat",
+   "body": null
+  },
+  {
+   "id": 1,
+   "pt": "Patinho de borracha",
+   "en": "Rubber duck",
+   "body": null
+  },
+  {
+   "id": 2,
+   "pt": "Bug (besouro)",
+   "en": "Bug (beetle)",
+   "body": null
+  },
+  {
+   "id": 3,
+   "pt": "Daemon (fantasminha)",
+   "en": "Daemon (little ghost)",
+   "body": null
+  },
+  {
+   "id": 4,
+   "pt": "Robô",
+   "en": "Robot",
+   "body": null
+  },
+  {
+   "id": 5,
+   "pt": "Caneca de café",
+   "en": "Coffee mug",
+   "body": null
+  },
+  {
+   "id": 6,
+   "pt": "Pinguim",
+   "en": "Penguin",
+   "body": null
+  },
+  {
+   "id": 7,
+   "pt": "Caranguejo",
+   "en": "Crab",
+   "body": null
+  },
+  {
+   "id": 8,
+   "pt": "Coruja",
+   "en": "Owl",
+   "body": null
+  },
+  {
+   "id": 9,
+   "pt": "Cachorro",
+   "en": "Dog",
+   "body": null
+  },
+  {
+   "id": 10,
+   "pt": "Alienígena",
+   "en": "Alien",
+   "body": null
+  },
+  {
+   "id": 11,
+   "pt": "Riff",
+   "en": "Riff",
+   "body": null
+  },
+  {
+   "id": 12,
+   "pt": "Dev",
+   "en": "Dev",
+   "body": null
+  },
+  {
+   "id": 14,
+   "pt": "Dino",
+   "en": "Dino",
+   "body": null
+  },
+  {
+   "id": 15,
+   "pt": "Dev-chan",
+   "en": "Dev-chan",
+   "body": null
+  },
+  {
+   "id": 16,
+   "pt": "Capivara",
+   "en": "Capybara",
+   "body": "9a6b47"
+  },
+  {
+   "id": 17,
+   "pt": "Axolote",
+   "en": "Axolotl",
+   "body": "f4a6c4"
+  },
+  {
+   "id": 18,
+   "pt": "Pombo-correio",
+   "en": "Carrier pigeon",
+   "body": "8e9ab0"
+  },
+  {
+   "id": 19,
+   "pt": "Bit",
+   "en": "Bit",
+   "body": "d5dae2"
+  },
+  {
+   "id": 20,
+   "pt": "Polvo",
+   "en": "Octopus",
+   "body": "c77dd0"
+  },
+  {
+   "id": 21,
+   "pt": "Meu pet",
+   "en": "My pet",
+   "body": null,
+   "custom": true
+  }
+ ],
+ "eyes": [
+  {
+   "id": 0,
+   "pt": "Redondos",
+   "en": "Round"
+  },
+  {
+   "id": 1,
+   "pt": "Grandes e brilhantes",
+   "en": "Big and shiny"
+  },
+  {
+   "id": 2,
+   "pt": "Sonolentos",
+   "en": "Sleepy"
+  }
+ ],
+ "wear": {
+  "head": [
+   {
+    "id": 1,
+    "pt": "Boné",
+    "en": "Cap"
+   },
+   {
+    "id": 2,
+    "pt": "Gorro",
+    "en": "Beanie"
+   },
+   {
+    "id": 3,
+    "pt": "Boina",
+    "en": "Beret"
+   },
+   {
+    "id": 4,
+    "pt": "Cartola",
+    "en": "Top hat"
+   },
+   {
+    "id": 5,
+    "pt": "Coroa",
+    "en": "Crown"
+   },
+   {
+    "id": 6,
+    "pt": "Chapéu de caubói",
+    "en": "Cowboy hat"
+   },
+   {
+    "id": 7,
+    "pt": "Chapéu de chef",
+    "en": "Chef's hat"
+   },
+   {
+    "id": 8,
+    "pt": "Bandana",
+    "en": "Bandana"
+   },
+   {
+    "id": 9,
+    "pt": "Coroa de flores",
+    "en": "Flower crown"
+   },
+   {
+    "id": 10,
+    "pt": "Auréola",
+    "en": "Halo"
+   }
+  ],
+  "face": [
+   {
+    "id": 11,
+    "pt": "Óculos de sol",
+    "en": "Sunglasses"
+   },
+   {
+    "id": 12,
+    "pt": "Óculos de nerd",
+    "en": "Nerd glasses"
+   },
+   {
+    "id": 14,
+    "pt": "Monóculo",
+    "en": "Monocle"
+   },
+   {
+    "id": 15,
+    "pt": "Bigode",
+    "en": "Moustache"
+   },
+   {
+    "id": 20,
+    "pt": "Headset gamer",
+    "en": "Gamer headset"
+   }
+  ],
+  "neck": [
+   {
+    "id": 16,
+    "pt": "Gravata-borboleta",
+    "en": "Bow tie"
+   },
+   {
+    "id": 17,
+    "pt": "Cachecol",
+    "en": "Scarf"
+   },
+   {
+    "id": 18,
+    "pt": "Lenço de pescoço",
+    "en": "Neckerchief"
+   },
+   {
+    "id": 19,
+    "pt": "Colar de contas",
+    "en": "Bead necklace"
+   },
+   {
+    "id": 21,
+    "pt": "Medalha “Subiu pra produção”",
+    "en": "“Shipped to prod” medal"
+   }
+  ]
+ },
+ "presets": [
+  {
+   "id": 0,
+   "pt": "Pêssego",
+   "en": "Peach",
+   "rgb": "f2b8a8"
+  },
+  {
+   "id": 1,
+   "pt": "Laranja",
+   "en": "Orange",
+   "rgb": "f55110"
+  },
+  {
+   "id": 2,
+   "pt": "Preto",
+   "en": "Black",
+   "rgb": "4a4a55"
+  },
+  {
+   "id": 3,
+   "pt": "Cinza",
+   "en": "Grey",
+   "rgb": "9aa3b0"
+  }
+ ],
+ "slots": [
+  {
+   "id": 0,
+   "pt": "Corpo",
+   "en": "Body"
+  },
+  {
+   "id": 1,
+   "pt": "Contorno",
+   "en": "Outline"
+  },
+  {
+   "id": 2,
+   "pt": "Orelhas por dentro, língua",
+   "en": "Inner ears, tongue"
+  },
+  {
+   "id": 3,
+   "pt": "Nariz, bico",
+   "en": "Nose, beak"
+  },
+  {
+   "id": 4,
+   "pt": "Traços do rosto",
+   "en": "Face lines"
+  },
+  {
+   "id": 5,
+   "pt": "Olhos",
+   "en": "Eyes"
+  },
+  {
+   "id": 6,
+   "pt": "Detalhe",
+   "en": "Accent"
+  }
+ ],
+ "code": {
+  "prefix": "MIBLO1:",
+  "maxBytes": 28
+ },
+ "studio": {
+  "pet": 21,
+  "name": {
+   "pt": "Meu pet",
+   "en": "My pet"
+  },
+  "grid": 48,
+  "paletteMax": 14,
+  "copyIndex": 15,
+  "fileMax": 8192,
+  "chunk": 768,
+  "framesMax": 40,
+  "moodFramesMax": 4,
+  "anticFramesMax": 12,
+  "fpsMax": 12,
+  "shadeMax": 12,
+  "nameMax": 15,
+  "codePrefix": "MPET1:",
+  "moods": [
+   "idle",
+   "blink",
+   "work",
+   "alert",
+   "happy",
+   "sleepy",
+   "dizzy",
+   "antic"
+  ],
+  "kinds": [
+   "body",
+   "line",
+   "detail",
+   "nose",
+   "lid",
+   "eye",
+   "accent",
+   "pupil",
+   "white",
+   "fixed"
+  ],
+  "anchors": [
+   "hatDy",
+   "phonesDy",
+   "phonesDx",
+   "neckDy",
+   "eyeY",
+   "eyeDx",
+   "darkEyes",
+   "ownGlasses"
+  ],
+  "anchorMin": [
+   -4,
+   -12,
+   0,
+   -16,
+   -12,
+   0,
+   0,
+   0
+  ],
+  "anchorMax": [
+   8,
+   8,
+   8,
+   8,
+   16,
+   20,
+   1,
+   1
+  ]
+ },
+ "wasm": "/miblo-look/miblo-look-1.20.0-1bbb55d51879.wasm"
+}
