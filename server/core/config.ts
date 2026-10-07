@@ -31,6 +31,8 @@ export function configProblems(env: Partial<Env>): string[] {
   if (!env.SESSION_SECRET || env.SESSION_SECRET.length < 32) out.push("SESSION_SECRET must be at least 32 characters");
   if (!env.MFA_KEY || !/^[A-Za-z0-9_-]{43}$/.test(env.MFA_KEY.replace(/=+$/, ""))) out.push("MFA_KEY must be 32 random bytes, base64url");
   if (!env.SERVER_IDENTITY_KEY) out.push("SERVER_IDENTITY_KEY is missing");
+  if (env.TRUSTED_PROXY && !/^[0-9A-Fa-f:.\/,\s]+$/.test(env.TRUSTED_PROXY)) out.push("TRUSTED_PROXY must list your proxy's addresses or CIDRs (like 172.30.247.0/24)");
+  if (env.TRUSTED_PROXY === "1") out.push("TRUSTED_PROXY=1 is no longer accepted: list your proxy's addresses or CIDRs (like 172.30.247.0/24)");
   if (!env.RELAY_VAPID_PUBLIC_KEY || !env.RELAY_VAPID_PRIVATE_KEY) out.push("RELAY_VAPID_PUBLIC_KEY / RELAY_VAPID_PRIVATE_KEY are missing (push alerts stay off)");
   return out;
 }

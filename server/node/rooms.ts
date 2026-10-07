@@ -11,7 +11,7 @@
 //   room sent before that is queued and delivered first.
 import crypto from "node:crypto";
 import type { WebSocket } from "ws";
-import { RelayRoom, type RelayEnv, type RoomRuntime, type RoomSocket, type RoomState, type RoomStorage } from "../core/relay/room";
+import { PUSH_BUDGET_OBJECT, RelayRoom, type RelayEnv, type RoomRuntime, type RoomSocket, type RoomState, type RoomStorage } from "../core/relay/room";
 import type { RoomNamespace, RoomStub } from "../core/env";
 import type { SqliteDb } from "./sqlite-db";
 
@@ -19,6 +19,12 @@ const OPEN = 1;
 const CLOSED = 3;
 /** setTimeout's longest delay; later alarms are re-armed when it fires. */
 const MAX_TIMER_MS = 2 **31 - 1;
+/** Storage quotas: keys per room (meta, frame, a few push subscriptions), per budget object, bytes per value. */
+const MAX_KEYS_PER_ROOM = 64;
+const MAX_KEYS_BUDGET = 20_000;
+const MAX_VALUE_BYTES = 128 * 1024;
+/** Rooms kept in memory at once (the rest are dropped while idle, then refused). */
+export const MAX_ROOMS_IN_MEMORY = 2_000;
 /** A room without sockets, timers or work for this long leaves memory (its storage stays). */
 const IDLE_EVICT_MS = 10 * 60_000;
 
@@ -148,7 +154,14 @@ class SqliteRoomStorage implements RoomStorage {
     return one(key);
   }
   async put(key: string, value: unknown): Promise<void> {
-    this.db.stmt("INSERT INTO room_kv (room, key, value) VALUES (?, ?, ?) ON CONFLICT(room, key) DO UPDATE SET value = excluded.value").run(this.name, key, JSON.stringify(value));
+    const text = JSON.stringify(value);
+    if (text.length > MAX_VALUE_BYTES) throw new Error("room storage: value too large");
+    const exists = this.db.stmt("SELECT 1 FROM room_kv WHERE room = ? AND key = ?").get(this.name, key);
+    if (!exists) {
+      const n = Number((this.db.stmt("SELECT COUNT(*) AS n FROM room_kv WHERE room = ?").get(this.name) as { n: number }).n);
+      if (n >= (this.name === PUSH_BUDGET_OBJECT ? MAX_KEYS_BUDGET : MAX_KEYS_PER_ROOM)) throw new Error("room storage: quota");
+    }
+    this.db.stmt("INSERT INTO room_kv (room, key, value) VALUES (?, ?, ?) ON CONFLICT(room, key) DO UPDATE SET value = excluded.value").run(this.name, key, text);
   }
   async delete(keys: string | string[]): Promise<unknown> {
     const list = Array.isArray(keys) ? keys : [keys];
@@ -304,6 +317,8 @@ export class NodeRooms implements RoomNamespace {
   host(name: string): NodeRoomHost {
     let h = this.hosts.get(name);
     if (!h) {
+      if (this.hosts.size >= MAX_ROOMS_IN_MEMORY) this.sweep(true);
+      if (this.hosts.size >= MAX_ROOMS_IN_MEMORY) throw new Error("too many rooms in memory");
       h = new NodeRoomHost(name, this);
       this.hosts.set(name, h);
     }
@@ -318,7 +333,7 @@ export class NodeRooms implements RoomNamespace {
     return p.socket;
   }
 
-  private sweep(): void {
+  private sweep(force = false): void {
     const now = Date.now();
     for (const [token, p] of this.pending) {
       if (now - p.at > 30_000) {
@@ -327,7 +342,7 @@ export class NodeRooms implements RoomNamespace {
       }
     }
     for (const [name, h] of this.hosts) {
-      if (h.sockets.size === 0 && h.busy === 0 && !h.hasTimer() && now - h.lastUsed > IDLE_EVICT_MS) {
+      if (h.sockets.size === 0 && h.busy === 0 && (force || (!h.hasTimer() && now - h.lastUsed > IDLE_EVICT_MS))) {
         h.stop();
         this.hosts.delete(name);
       }

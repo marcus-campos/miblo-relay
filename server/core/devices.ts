@@ -22,7 +22,7 @@ import type { D1Result, RequestScope } from "./env";
 import { isRoom } from "./relay/protocol";
 import { clientNetwork, limited } from "./http";
 import { publicOrigin } from "./config";
-import { claimRoom, relayAccount, setRoomPlan } from "./relay-plan";
+import { allowRoom, claimRoom, relayAccount } from "./relay-plan";
 
 /** Device authorisation: code lifetime and the minimum polling interval. */
 const DEVICE_CODE_MINUTES = 10;
@@ -293,6 +293,9 @@ export async function registerRoom(
   const mine = await DB.prepare(`SELECT COUNT(*) AS n FROM plus_rooms WHERE device_id = ? AND room != ?`).bind(device.id, input.room).first<{ n: number }>();
   if ((mine?.n ?? 0) >= ROOMS_PER_DEVICE) return { ok: false, error: "room_limit", status: 409 };
   const desired = { plan: "plus" as const, until: null };
+  // The room may be used from now on (its writer is refused before: no open relay), even if the
+  // writer has not connected yet; the claim below then needs it connected.
+  if ((await allowRoom(scope.env, input.room, true)) !== "ok") return { ok: false, error: "relay_unavailable", status: 503 };
   const verdict = await claimRoom(scope.env, input.room, input.challenge, input.proof, desired.plan, desired.until, await relayAccount(scope, device.user_id));
   if (verdict === "bad_proof") return { ok: false, error: "invalid_proof", status: 403 };
   if (verdict === "not_ready") return { ok: false, error: "room_not_ready", status: 409 };
@@ -314,7 +317,7 @@ export async function removeRoom(scope: RequestScope, device: LinkedDevice, room
   if (!isRoom(room)) return false;
   const row = await scope.env.DB.prepare(`SELECT room FROM plus_rooms WHERE room = ? AND device_id = ?`).bind(room, device.id).first();
   if (!row) return false;
-  await setRoomPlan(scope.env, room, "free", null);
+  await allowRoom(scope.env, room, false);
   await scope.env.DB.prepare(`DELETE FROM plus_rooms WHERE room = ?`).bind(room).run();
   await scope.env.DB.prepare(`DELETE FROM phone_grants WHERE device_id = ? AND room = ?`).bind(device.id, room).run();
   return true;
@@ -329,8 +332,8 @@ export async function revokeDevice(scope: RequestScope, userId: string, deviceId
   if (!done) return false;
   const rooms = await DB.prepare(`SELECT room FROM plus_rooms WHERE device_id = ?`).bind(deviceId).all<{ room: string }>();
   for (const r of rooms.results) {
-    // Best effort; the room row goes either way.
-    await setRoomPlan(scope.env, r.room, "free", null);
+    // Best effort; the room row goes either way. The room itself goes too (no more writer).
+    await allowRoom(scope.env, r.room, false);
   }
   await DB.prepare(`DELETE FROM plus_rooms WHERE device_id = ?`).bind(deviceId).run();
   // Protocol v6: the pairings it sealed to the account's phones go with it.

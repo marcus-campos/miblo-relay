@@ -5,7 +5,8 @@
 #   3. docker compose up -d --build
 #   4. docker compose logs relay   -> the setup token and the identity fingerprint
 #
-# The relay keeps its database and secrets in the relay-data volume: back it up.
+# The relay keeps its database in the relay-data volume (back it up) and its secrets in
+# relay-secrets (keep that out of backups others can read).
 services:
   relay:
     build:
@@ -14,11 +15,15 @@ services:
     restart: unless-stopped
     environment:
       PUBLIC_ORIGIN: https://${RELAY_DOMAIN:?set RELAY_DOMAIN in .env}
-      # Caddy sets X-Forwarded-For to the client's address; only Caddy can reach this port.
-      TRUSTED_PROXY: "1"
+      # Only connections from the private network below (Caddy) may name the client in
+      # X-Forwarded-For; the relay's port is not published.
+      TRUSTED_PROXY: 172.30.247.0/24
       RELAY_VAPID_SUBJECT: ${RELAY_VAPID_SUBJECT:-}
     volumes:
       - relay-data:/data
+      - relay-secrets:/secrets
+    networks:
+      - relay
     expose:
       - "8787"
     read_only: true
@@ -30,7 +35,7 @@ services:
       - ALL
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     restart: unless-stopped
     depends_on:
       - relay
@@ -40,12 +45,21 @@ services:
       - "443:443/udp"
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN}
+    networks:
+      - relay
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
 
+networks:
+  relay:
+    ipam:
+      config:
+        - subnet: 172.30.247.0/24
+
 volumes:
   relay-data:
+  relay-secrets:
   caddy-data:
   caddy-config:

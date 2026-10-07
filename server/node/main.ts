@@ -1,12 +1,14 @@
 // `node dist/server.mjs [serve|setup-token|reset-account|fingerprint|check]`: the self-hosted
 // Miblo relay on Node. Configuration comes from the environment (README, "Configuration"); the
-// secrets you do not set are made once and kept in $MIBLO_RELAY_DATA/secrets.json (0600).
+// secrets you do not set are made once and kept in secrets.json (0600), in
+// $MIBLO_RELAY_SECRETS_DIR (default: $MIBLO_RELAY_DATA).
 import path from "node:path";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { fatalProblems, configProblems } from "../core/config";
 import { scopeOf } from "../core/env";
-import { setupNeeded } from "../core/account/account";
+import { setupNeeded, setupTokenUsed } from "../core/account/account";
 import { identityDocument } from "../core/identity";
 import { createRelayServer } from "./server";
 import { loadSecrets, newSetupToken } from "./secrets";
@@ -15,12 +17,14 @@ import { SqliteDb } from "./sqlite-db";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(process.env.MIBLO_RELAY_DATA ?? "./data");
 const dbFile = path.join(dataDir, "relay.sqlite");
+// The secrets may live apart from the database (another volume, kept out of the database's backups).
+const secretsDir = path.resolve(process.env.MIBLO_RELAY_SECRETS_DIR ?? dataDir);
 // The bundle sits in dist/ next to dist/public; migrations/ is beside dist/ (and copied into the image).
 const publicDir = [process.env.MIBLO_RELAY_PUBLIC, path.join(here, "public")].find((d) => d && fs.existsSync(d)) ?? null;
 const migrationsDir = [process.env.MIBLO_RELAY_MIGRATIONS, path.join(here, "..", "migrations"), path.join(here, "migrations")].find((d) => d && fs.existsSync(d))!;
 
 async function config() {
-  const secrets = await loadSecrets(dataDir);
+  const secrets = await loadSecrets(secretsDir);
   return {
     ...secrets,
     PUBLIC_ORIGIN: process.env.PUBLIC_ORIGIN ?? "",
@@ -29,6 +33,19 @@ async function config() {
     TRUSTED_PROXY: process.env.TRUSTED_PROXY,
     MIBLO_RELAY_DEV: process.env.MIBLO_RELAY_DEV,
   };
+}
+
+/** The setup token to show: the current one, or a new one if it was used (null: the environment's was). */
+function freshSetupToken(current: string): string | null {
+  const db = new SqliteDb(dbFile);
+  try {
+    db.migrate(migrationsDir);
+    const hash = crypto.createHash("sha256").update(current).digest("hex");
+    if (!db.sqlite.prepare("SELECT 1 FROM setup_tokens_used WHERE token_hash = ?").get(hash)) return current;
+  } finally {
+    db.sqlite.close();
+  }
+  return process.env.SETUP_TOKEN ? null : newSetupToken(secretsDir);
 }
 
 async function main(): Promise<number> {
@@ -45,7 +62,13 @@ async function main(): Promise<number> {
     return 0;
   }
   if (cmd === "setup-token") {
-    console.log(env.SETUP_TOKEN);
+    // A token works for one setup: once used, a new one is made (an abandoned setup is redone).
+    const token = freshSetupToken(env.SETUP_TOKEN);
+    if (!token) {
+      console.error("SETUP_TOKEN (set in the environment) was already used: set a new one and restart.");
+      return 1;
+    }
+    console.log(token);
     return 0;
   }
   if (cmd === "reset-account") {
@@ -55,7 +78,7 @@ async function main(): Promise<number> {
     db.migrate(migrationsDir);
     db.sqlite.exec("DELETE FROM sessions; DELETE FROM mfa_passkeys; DELETE FROM mfa_totp; DELETE FROM mfa_recovery_codes; DELETE FROM mfa_failures; DELETE FROM mfa_challenges;");
     db.sqlite.close();
-    const token = newSetupToken(dataDir);
+    const token = newSetupToken(secretsDir);
     console.log(`Account reset. Open ${env.PUBLIC_ORIGIN}/conta and use this setup token:\n\n    ${token}\n`);
     return 0;
   }
@@ -77,7 +100,11 @@ async function main(): Promise<number> {
   console.log(`miblo-relay ${doc.version} listening on ${host}:${port} as ${env.PUBLIC_ORIGIN}`);
   console.log(`Server identity fingerprint: ${doc.fingerprint}`);
   if (await setupNeeded(scopeOf(app.env))) {
-    console.log(`\nFirst run: open ${env.PUBLIC_ORIGIN}/conta and create your account with this setup token:\n\n    ${env.SETUP_TOKEN}\n`);
+    if (await setupTokenUsed(scopeOf(app.env), env.SETUP_TOKEN)) {
+      console.log("\nThe account has no second factor yet and its setup token was used: make a new one with `node dist/server.mjs setup-token`.\n");
+    } else {
+      console.log(`\nFirst run: open ${env.PUBLIC_ORIGIN}/conta and create your account with this setup token:\n\n    ${env.SETUP_TOKEN}\n`);
+    }
   }
   if (!publicDir) console.warn("miblo-relay: no built phone app found (run `npm run build`); only the API is served.");
   const stop = () => {

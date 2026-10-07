@@ -48,8 +48,13 @@ export type Env = {
   RELAY_VAPID_SUBJECT?: string;
   /** Optional key of the relay's daily network hashes (else derived from the VAPID key). */
   RELAY_IP_KEY?: string;
-  /** "1": the client address is the last X-Forwarded-For entry, the one your own reverse proxy added. */
+  /**
+   * Node: your reverse proxy's addresses or CIDRs ("172.30.247.0/24"): from them only, the client
+   * address is the last X-Forwarded-For entry (the one the proxy added). Unset: the socket's.
+   */
   TRUSTED_PROXY?: string;
+  /** Set by the runtime, not by you: the password hash's PBKDF2 iterations (Node 600,000; Workers 100,000). */
+  PBKDF2_ITERATIONS?: string;
   /** "1": development (http on localhost allowed). Never in production. */
   MIBLO_RELAY_DEV?: string;
 };

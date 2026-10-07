@@ -109,7 +109,7 @@ export function isIpv6(ip: string): boolean {
 /**
  * The client's address. On Cloudflare, CF-Connecting-IP is set by Cloudflare itself; the Node
  * runtime removes whatever a client sent under that name and sets it from the socket (or, with
- * TRUSTED_PROXY=1, from your reverse proxy's X-Forwarded-For). Used only as a rate-limit key.
+ * a connection from a TRUSTED_PROXY address, from your reverse proxy's X-Forwarded-For). Used only as a rate-limit key.
  */
 export function clientIp(request: Request): string {
   return request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -117,6 +117,8 @@ export function clientIp(request: Request): string {
 
 // The rate limiter: a fixed window per key, in memory.
 const windows = new Map<string, { start: number; count: number }>();
+/** How many keys the limiter keeps (each a few dozen bytes). */
+export const LIMIT_KEYS = 5000;
 
 /** Forgets every count (tests). */
 export function resetLimits(): void {
@@ -126,11 +128,12 @@ export function resetLimits(): void {
 export function memoryLimit(key: string, limit: number, periodMs = 60_000, now = Date.now()): boolean {
   const w = windows.get(key);
   if (!w || now - w.start >= periodMs) {
-    // Never cleared wholesale (a flood of new keys would reset everyone's count): expired windows
-    // go first, then the oldest ones.
-    if (windows.size > 5000) {
+    // Fails closed: a live count is never dropped to make room (a flood of new keys would reset
+    // everyone's, the attacker's included). Expired windows go; while the table is still full of
+    // live ones, a new key is refused until some expire.
+    if (windows.size >= LIMIT_KEYS) {
       for (const [k, v] of windows) if (now - v.start >= periodMs) windows.delete(k);
-      if (windows.size > 5000) for (const k of [...windows.keys()].slice(0, windows.size - 4500)) windows.delete(k);
+      if (windows.size >= LIMIT_KEYS) return false;
     }
     windows.set(key, { start: now, count: 1 });
     return true;

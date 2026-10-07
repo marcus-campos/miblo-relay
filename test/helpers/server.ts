@@ -99,6 +99,11 @@ export async function adminWithTotp(base: string, username = "ana", password = "
   const b = new Browser(base);
   const s = await b.post("/api/setup", { token: SETUP_TOKEN, username, password });
   if (s.status !== 200) throw new Error(`setup ${s.status} ${JSON.stringify(s.data)}`);
+  return protectWithTotp(b, username, password);
+}
+
+/** The setup session `b` adds an authenticator app (setup done). -> { browser, secret }. */
+export async function protectWithTotp(b: Browser, username = "ana", password = "correct horse battery") {
   await b.refreshCsrf();
   const t = await b.post("/api/community/mfa/totp/setup", {});
   const secret = String(t.data.secret);

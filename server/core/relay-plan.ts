@@ -41,3 +41,8 @@ export function claimRoom(env: Pick<Env, "RELAY">, room: string, challenge: stri
 export function setRoomPlan(env: Pick<Env, "RELAY">, room: string, plan: RoomPlan, until: string | null, account?: string) {
   return call(env, room, { op: "set", plan, until: plan === "plus" ? untilMs(until) : null, ...(account ? { account } : {}) });
 }
+
+/** A linked computer registered `room` (its writer may connect), or no longer has it (it goes). */
+export function allowRoom(env: Pick<Env, "RELAY">, room: string, allowed: boolean) {
+  return call(env, room, { op: "allow", allowed });
+}

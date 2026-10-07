@@ -7,10 +7,12 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { Env } from "../core/env";
 import { scopeOf } from "../core/env";
+import { PBKDF2_ITERATIONS_NODE } from "../core/account/password";
 import { handle, type Assets } from "../core/site";
 import { housekeeping } from "../core/housekeeping";
 import { SqliteDb } from "./sqlite-db";
 import { NodeRooms } from "./rooms";
+import { parseRanges, inRanges } from "./cidr";
 
 export type ServerOptions = {
   /** Everything but DB and RELAY (made here). */
@@ -60,19 +62,20 @@ export function fileAssets(dir: string | null): Assets {
 
 /**
  * The client's address as the core sees it (CF-Connecting-IP, set here and nowhere else): the
- * socket's, or with TRUSTED_PROXY=1 the last X-Forwarded-For entry, the one your own proxy added
- * (earlier entries come from the client and are ignored). Only a rate-limit key.
+ * socket's; only when the connection comes from your own proxy (TRUSTED_PROXY: its addresses or
+ * CIDRs) the last X-Forwarded-For entry, the one that proxy added. Only a rate-limit key.
  */
-export function clientAddress(req: http.IncomingMessage, trustedProxy: boolean): string {
-  if (trustedProxy) {
+export function clientAddress(req: http.IncomingMessage, trusted: ReturnType<typeof parseRanges>): string {
+  const peer = req.socket.remoteAddress ?? "unknown";
+  if (trusted && trusted.length && inRanges(peer, trusted)) {
     const xff = req.headers["x-forwarded-for"];
     const last = (Array.isArray(xff) ? xff.join(",") : xff)?.split(",").map((x) => x.trim()).filter(Boolean).pop();
     if (last) return last;
   }
-  return req.socket.remoteAddress ?? "unknown";
+  return peer;
 }
 
-function toRequest(req: http.IncomingMessage, origin: URL, trustedProxy: boolean, body: Buffer | null): Request {
+function toRequest(req: http.IncomingMessage, origin: URL, trustedProxy: ReturnType<typeof parseRanges>, body: Buffer | null): Request {
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue;
@@ -120,9 +123,10 @@ export async function createRelayServer(opts: ServerOptions) {
   const db = new SqliteDb(opts.dbFile);
   db.migrate(opts.migrationsDir);
   const rooms = new NodeRooms(db, opts.env);
-  const env: Env = { ...(opts.env as Env), DB: db, RELAY: rooms };
+  // Node computes PBKDF2 with any work factor (a Worker is capped at 100,000).
+  const env: Env = { ...(opts.env as Env), PBKDF2_ITERATIONS: String(PBKDF2_ITERATIONS_NODE), DB: db, RELAY: rooms };
   const origin = new URL(env.PUBLIC_ORIGIN);
-  const trustedProxy = env.TRUSTED_PROXY === "1";
+  const trustedProxy = parseRanges(env.TRUSTED_PROXY);
   const assets = fileAssets(opts.publicDir);
   const scope = scopeOf(env);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 + 1024, perMessageDeflate: false });

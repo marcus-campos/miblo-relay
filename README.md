@@ -52,7 +52,7 @@ Você precisa de uma máquina com Docker, um nome DNS apontando para ela e as po
 
 Depois, no computador: [apontar o plugin para o seu servidor](#apontar-o-seu-computador-para-ele).
 Sem Docker: `npm ci && npm run build && PUBLIC_ORIGIN=https://seu-dominio node dist/server.mjs`
-(Node 22.13 ou mais novo) atrás de qualquer proxy com TLS.
+(Node 22.13+ ou 23.4+, que têm `node:sqlite`) atrás de qualquer proxy com TLS.
 
 ## Na sua própria conta Cloudflare
 
@@ -101,16 +101,20 @@ o miblo.ai (também com o código do Miblo).
 | Variável | Obrigatória | O que é |
 | --- | --- | --- |
 | `PUBLIC_ORIGIN` | sim | O endereço https do servidor, só a origem (`https://relay.exemplo.com`). É a origem do app, o relying party das passkeys e o endereço do link de vinculação. Nunca vem da requisição. |
-| `TRUSTED_PROXY` | atrás de proxy | `1`: o endereço do cliente é a última entrada do `X-Forwarded-For` (a que o seu proxy colocou). Só usado como chave de limite de taxa. |
+| `TRUSTED_PROXY` | atrás de proxy | Os endereços ou faixas (CIDR) do seu proxy, separados por vírgula (`172.30.247.0/24`). Só de uma conexão vinda deles o endereço do cliente é a última entrada do `X-Forwarded-For` (a que o proxy colocou). Só usado como chave de limite de taxa. Não defina sem um proxy na frente. |
 | `RELAY_VAPID_SUBJECT` | não | Contato enviado aos serviços de push (`mailto:voce@exemplo.com`); sem ele, o endereço do servidor. |
-| `SESSION_SECRET`, `MFA_KEY`, `SERVER_IDENTITY_KEY`, `RELAY_VAPID_PUBLIC_KEY`, `RELAY_VAPID_PRIVATE_KEY`, `SETUP_TOKEN` | não (Node) / sim (Cloudflare) | No Node, os que você não definir são criados uma vez e guardados em `$MIBLO_RELAY_DATA/secrets.json` (0600). Na Cloudflare, `npm run cf:secrets` cria e guarda todos. |
-| `MIBLO_RELAY_DATA` | não | Pasta do banco e dos segredos (Docker: `/data`). |
+| `SESSION_SECRET`, `MFA_KEY`, `SERVER_IDENTITY_KEY`, `RELAY_VAPID_PUBLIC_KEY`, `RELAY_VAPID_PRIVATE_KEY`, `SETUP_TOKEN` | não (Node) / sim (Cloudflare) | No Node, os que você não definir são criados uma vez e guardados em `secrets.json` (0600), na pasta `$MIBLO_RELAY_SECRETS_DIR`. Na Cloudflare, `npm run cf:secrets` cria e guarda todos. |
+| `MIBLO_RELAY_DATA` | não | Pasta do banco (Docker: `/data`). |
+| `MIBLO_RELAY_SECRETS_DIR` | não | Pasta do `secrets.json` (padrão: `MIBLO_RELAY_DATA`; Docker: `/secrets`, um volume à parte, fora dos backups do banco). |
 | `PORT`, `HOST` | não | Onde o Node escuta (padrão `0.0.0.0:8787`). |
 
 Comandos do Node: `node dist/server.mjs check` (confere a configuração), `fingerprint`,
-`setup-token`, `reset-account` (perdeu todos os fatores: apaga fatores e sessões e gera um novo
-código de configuração; computadores e celulares continuam). Na Cloudflare, para o mesmo efeito,
-apague as linhas de `mfa_*` e `sessions` com `wrangler d1 execute` e rode `npm run cf:secrets`.
+`setup-token` (o código de configuração vale para uma configuração só; depois de usado, este
+comando gera outro, para refazer uma configuração abandonada), `reset-account` (perdeu todos os
+fatores: apaga fatores e sessões e gera um novo código de configuração; computadores e celulares
+continuam). Na Cloudflare, para o mesmo efeito, apague as linhas de `mfa_*` e `sessions` com
+`wrangler d1 execute` e defina um novo código com `npx wrangler secret put SETUP_TOKEN` (um valor
+aleatório longo, como `openssl rand -base64 24`).
 
 ## Atualizar
 
@@ -127,7 +131,9 @@ Acompanhe as releases do repositório: correções de segurança vêm marcadas. 
 
 - Leia o [modelo de ameaças](docs/threat-model.md): um operador malicioso tem o mesmo poder que um
   miblo.ai malicioso, que o protocolo já tolera.
-- Uma conta só, segundo fator obrigatório; a senha sozinha nunca entra.
+- Uma conta só, segundo fator obrigatório; a senha sozinha nunca entra. Senha com PBKDF2-SHA-256
+  (600.000 iterações no Node; 100.000 na Cloudflare, o máximo que um Worker permite). Senhas erradas
+  bloqueiam só a rede de onde vieram, por 15 minutos, com a mesma resposta de um nome errado.
 - O plugin fixa a chave de identidade do servidor na primeira vez (TOFU) e exige uma assinatura
   nova dela antes de usar o servidor; se a chave mudar, nada é enviado até você aceitar a nova com
   `miblo server set` (e o código do Miblo).
@@ -198,7 +204,7 @@ TLS certificate by itself).
    Generate the recovery codes.
 
 Without Docker: `npm ci && npm run build && PUBLIC_ORIGIN=https://your-domain node dist/server.mjs`
-(Node 22.13 or newer) behind any TLS proxy.
+(Node 22.13+ or 23.4+, which have `node:sqlite`) behind any TLS proxy.
 
 ### Deploy to your own Cloudflare
 
@@ -245,16 +251,19 @@ code it shows. `miblo server` shows where it points; `miblo server reset` goes b
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `PUBLIC_ORIGIN` | yes | The server's https address, the origin alone (`https://relay.example.com`): the app's origin, the passkeys' relying party, the device-link address. Never taken from a request. |
-| `TRUSTED_PROXY` | behind a proxy | `1`: the client address is the last `X-Forwarded-For` entry (the one your proxy added). Only a rate-limit key. |
+| `TRUSTED_PROXY` | behind a proxy | Your proxy's addresses or ranges (CIDR), comma-separated (`172.30.247.0/24`). Only for a connection from them is the client address the last `X-Forwarded-For` entry (the one the proxy added). Only a rate-limit key. Never set it without a proxy in front. |
 | `RELAY_VAPID_SUBJECT` | no | A contact sent to the push services (`mailto:you@example.com`); defaults to the server's address. |
-| `SESSION_SECRET`, `MFA_KEY`, `SERVER_IDENTITY_KEY`, `RELAY_VAPID_PUBLIC_KEY`, `RELAY_VAPID_PRIVATE_KEY`, `SETUP_TOKEN` | no (Node) / yes (Cloudflare) | On Node, the ones you do not set are made once and kept in `$MIBLO_RELAY_DATA/secrets.json` (0600). On Cloudflare, `npm run cf:secrets` makes and stores them all. |
-| `MIBLO_RELAY_DATA` | no | The database and secrets folder (Docker: `/data`). |
+| `SESSION_SECRET`, `MFA_KEY`, `SERVER_IDENTITY_KEY`, `RELAY_VAPID_PUBLIC_KEY`, `RELAY_VAPID_PRIVATE_KEY`, `SETUP_TOKEN` | no (Node) / yes (Cloudflare) | On Node, the ones you do not set are made once and kept in `secrets.json` (0600), in `$MIBLO_RELAY_SECRETS_DIR`. On Cloudflare, `npm run cf:secrets` makes and stores them all. |
+| `MIBLO_RELAY_DATA` | no | The database folder (Docker: `/data`). |
+| `MIBLO_RELAY_SECRETS_DIR` | no | Where `secrets.json` lives (default: `MIBLO_RELAY_DATA`; Docker: `/secrets`, a volume of its own, kept out of the database's backups). |
 | `PORT`, `HOST` | no | Where Node listens (default `0.0.0.0:8787`). |
 
-Node commands: `node dist/server.mjs check`, `fingerprint`, `setup-token`, `reset-account` (lost
-every factor: removes the factors and sessions and makes a new setup token; computers and phones
-stay). On Cloudflare, delete the `mfa_*` and `sessions` rows with `wrangler d1 execute` and run
-`npm run cf:secrets` for the same.
+Node commands: `node dist/server.mjs check`, `fingerprint`, `setup-token` (a setup token works
+for one setup; once used, this command makes a new one, to redo an abandoned setup),
+`reset-account` (lost every factor: removes the factors and sessions and makes a new setup token;
+computers and phones stay). On Cloudflare, delete the `mfa_*` and `sessions` rows with
+`wrangler d1 execute` and set a new token with `npx wrangler secret put SETUP_TOKEN` (a long random
+value, like `openssl rand -base64 24`) for the same.
 
 ### Upgrading
 
@@ -271,7 +280,9 @@ first.
 
 - Read the [threat model](docs/threat-model.md): a malicious operator is as powerful as a
   malicious miblo.ai, which the protocol already tolerates.
-- One account, second factor mandatory; the password alone never signs in.
+- One account, second factor mandatory; the password alone never signs in. Passwords use
+  PBKDF2-SHA-256 (600,000 iterations on Node; 100,000 on Cloudflare, a Worker's maximum). Wrong
+  passwords lock only the network they came from, for 15 minutes, with the same answer as a wrong name.
 - The plugin pins the server's identity key the first time (TOFU) and asks for a fresh signature
   with it before using the server; if the key changes, nothing is sent until you accept the new one
   with `miblo server set` (and your Miblo's code).

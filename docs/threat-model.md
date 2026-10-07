@@ -52,38 +52,57 @@ Same as a malicious miblo.ai, against the same defenses:
 ### 2. A network attacker
 
 - TLS everywhere (Caddy / Cloudflare); the plugin refuses anything but https. HSTS on every answer.
-- **A different server under your server's name** (a hijacked DNS record, a certificate mis-issued
-  for your domain, a reinstalled server you did not expect): the plugin pinned the server's Ed25519
+- **What the identity pin does, and what it does not.** The plugin pinned the server's Ed25519
   identity key when you ran `miblo server set` (you compared its fingerprint with the one your
-  server printed). Before any account or relay call it asks the server to sign a fresh nonce bound
-  to its origin; another key gets nothing (`miblo server` warns). The phone app itself has no such
-  pin (it is a web page); its trust is TLS, like miblo.ai's.
+  server printed) and asks the server to sign a fresh nonce bound to its origin before any account
+  or relay call. That detects a *replaced* server: a reinstall you did not expect, or another
+  machine answering for your name that does not have your server's key. It is **not bound to the
+  TLS connection**: an attacker who holds a valid certificate for your domain (a hijacked DNS
+  record plus a mis-issued or ACME-obtained certificate) and who can also reach your real server
+  can relay the signature request to it and sit in the middle. Such an attacker is exactly a
+  malicious operator (section 1): it sees ciphertext and metadata and can deny service, but the
+  end-to-end protocol holds (no keys, no phone of its own let in, nothing done on your computer).
+  Binding the pin to the TLS key (the server signing its certificate's SPKI and the plugin pinning
+  it) needs the plugin's HTTP and WebSocket clients to expose the peer certificate; it is noted as
+  future work. The phone app itself has no pin (it is a web page): its trust is TLS, like miblo.ai's.
 - Redirects are never followed by the plugin (`redirect: "error"`), so a server cannot bounce its
   calls to another host (miblo.ai included).
 
 ### 3. Someone on the internet against your server
 
 - **Setup:** the account is created only with `SETUP_TOKEN` (192 bits, shown in your server's log
-  or set by you), and only while the account has no second factor. Password sign-in is refused
-  until a second factor exists, so an abandoned setup is never a password-only account.
-- **Guessing:** 10 sign-ins a minute per address, 5 setup tries, 30 second-factor tries; the
-  account's password and its second factor each lock for 15 minutes after 5 wrong tries (counted
-  atomically per account, whatever arrives in parallel). Unknown names cost the same time as wrong
-  passwords. The lockout can be triggered by anyone (a nuisance, not a breach); a passkey sign-in is
-  not subject to the password lock.
+  or set by you), and only while the account has no second factor. A token works for one setup
+  (its hash is recorded when it is used), so a token read later from a log cannot redo an abandoned
+  setup; a new one comes from the operator's shell. Password sign-in is refused until a second
+  factor exists, so an abandoned setup is never a password-only account.
+- **Guessing:** 10 sign-ins a minute per network (an IPv6 /64), 5 setup tries, 30 second-factor
+  tries; 5 wrong passwords lock password sign-in for 15 minutes for the network they came from
+  (so a stranger cannot keep the owner out), and 5 wrong second factors lock the account's second
+  factor for 15 minutes (counted atomically per account, whatever arrives in parallel). A wrong
+  name, a wrong password and a locked network get the same 401 after the same work. Passwords are
+  PBKDF2-SHA-256 with 600,000 iterations on Node and 100,000 on Cloudflare (a Worker's ceiling);
+  older hashes are redone at sign-in. The in-memory rate limiter fails closed: when its table is
+  full of live counts, a new key is refused rather than an old count dropped.
+- **Second factors:** removing one is a single statement that also checks another factor stays, so
+  parallel removals can never leave the account without a second factor.
 - **CSRF / cross-site:** JSON-only writes, `Sec-Fetch-Site` and `Origin` checks, a per-session CSRF
-  token, `SameSite=Lax` HttpOnly cookies (`Secure` on https).
+  token, `SameSite=Lax` HttpOnly cookies (`__Host-` prefixed and `Secure` on https: no other host
+  or subdomain can set or shadow them).
 - **Device-code phishing (RFC 8628 §5.4):** the link page never takes a code from a link (only typed
   into its own form, with a per-session form token), the first session that looks a code up holds
   it, codes live 10 minutes and are used once, linking needs the second factor passed in the last 5
   minutes.
-- **Relay abuse:** the relay's limits are miblo.ai's (frame sizes and rates, pending sockets, rooms
-  per network, push budgets); upgrades and deletes are limited per address.
+- **Relay abuse:** your server is no open relay: a writer is accepted only in a room one of your
+  linked computers registered (a stranger's writer gets 403). On top, the relay's limits are
+  miblo.ai's (frame sizes and rates, pending sockets, rooms per network, push budgets); upgrades and
+  deletes are limited per address.
 - **Client address spoofing (Node):** the server sets the client address itself from the socket;
-  with `TRUSTED_PROXY=1` it takes only the last `X-Forwarded-For` entry (the one your proxy added).
-  Only enable it when nothing but your proxy can reach the port (the compose file only `expose`s it).
+  only for a connection from an address in `TRUSTED_PROXY` (your proxy's addresses or CIDRs) does
+  it take the last `X-Forwarded-For` entry (the one your proxy added). The compose file only
+  `expose`s the port and trusts its own network's range; the `docker run` example publishes on
+  127.0.0.1.
 - **XSS:** a strict CSP (`script-src 'self' 'wasm-unsafe-eval'`, no inline scripts at all, no
-  inline handlers, `frame-ancestors 'none'`), `nosniff`, `Referrer-Policy: no-referrer`.
+  inline handlers, `style-src 'self'` with no inline styles, `frame-ancestors 'none'`), `nosniff`, `Referrer-Policy: no-referrer`.
 
 ### 4. Something on your computer (an AI agent, a script, malware)
 

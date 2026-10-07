@@ -9,6 +9,8 @@ import { LIMITS, UP_PER_MINUTE } from "../../server/core/relay/protocol";
 import { uniqueIp } from "./ips";
 import type { Harness } from "./harness";
 
+// The protocol as miblo.ai runs it: rooms open to any writer (RELAY_OPEN_ROOMS=1); a self-hosted
+// server's registered-rooms-only rule is checked in test/api.test.ts and test/worker.test.ts.
 export function relaySuite(make: () => Promise<Harness>) {
 const subtle = webcrypto.subtle;
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");

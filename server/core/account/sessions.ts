@@ -10,8 +10,18 @@
 // email sign-in links, communities, bans or anything else a single-person server has no use for.
 import { hmac, hmacVerify, nowIso, randomToken, sessionSecret, sha256Hex } from "../crypto";
 import type { RequestScope } from "../env";
+import { publicOrigin } from "../config";
 
 export const SESSION_COOKIE = "miblo_session";
+
+/**
+ * The session cookie's name for an origin: "__Host-miblo_session" over https (the browser then
+ * only takes it Secure, for this exact host, Path=/, so no sibling subdomain can set or shadow
+ * it); the plain name on http (development on localhost only).
+ */
+export function sessionCookieName(origin: string): string {
+  return new URL(origin).protocol === "https:" ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+}
 export const SESSION_DAYS = 30;
 
 /** The account. `email` is the account's name (what the phone app shows as the signed-in person). */
@@ -46,11 +56,11 @@ function secure(origin: string): string {
 }
 
 export function sessionCookie(value: string, origin: string): string {
-  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure(origin)}`;
+  return `${sessionCookieName(origin)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure(origin)}`;
 }
 
 export function clearSessionCookie(origin: string): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure(origin)}`;
+  return `${sessionCookieName(origin)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure(origin)}`;
 }
 
 /** Creates a session row and returns the cookie value. `mfa`: the session passed it at sign-in (a passkey). */
@@ -75,7 +85,9 @@ export async function createSession(scope: RequestScope, uid: string, userAgent:
 export async function sessionFromCookie(scope: RequestScope, cookieHeader: string | null, opts: { allowPending?: boolean } = {}): Promise<Session | null> {
   const secret = sessionSecret(scope);
   if (!secret) return null;
-  const raw = cookieValue(cookieHeader, SESSION_COOKIE);
+  const origin = publicOrigin(scope.env);
+  if (!origin) return null;
+  const raw = cookieValue(cookieHeader, sessionCookieName(origin.origin));
   if (!raw || raw.length > 200) return null;
   const dot = raw.indexOf(".");
   if (dot < 1) return null;

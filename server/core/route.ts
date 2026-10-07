@@ -55,7 +55,7 @@ export function accountActionLimited(userId: string, action: string): boolean {
 /** The second-factor routes: per-IP and per-account limits, and what the session needs for this step. */
 export type MfaStep = "verify" | "setup" | "session" | "fresh";
 export async function mfaRequest<S extends z.ZodType>(scope: RequestScope, request: Request, schema: S, step: MfaStep): Promise<MemberRequest<z.infer<S>>> {
-  if (limited(`mfa:${clientIp(request)}`, 30)) return { ok: false, response: tooMany() };
+  if (limited(`mfa:${clientNetwork(clientIp(request))}`, 30)) return { ok: false, response: tooMany() };
   const r = await memberRequest(scope, request, schema, { allowPending: step === "verify" });
   if (!r.ok) return r;
   if (limited(`mfa-user:${r.session.user.id}`, 20)) return { ok: false, response: tooMany() };

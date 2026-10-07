@@ -112,7 +112,12 @@ suite("the plugin against a self-hosted server", () => {
     const secrets = readSecrets(dataDir);
     bridge = createBridge({ dataDir, discoverFn: async () => [], host: "Ana-Mac" });
     await bridge.push();
-    await until(() => bridge.phone.connected, 20_000);
+    // The bridge's tick registers the room first (this server accepts no writer in a room no
+    // linked computer registered), then the relay connects.
+    await until(() => {
+      bridge.plus.tick();
+      return bridge.phone.connected;
+    }, 20_000);
     await until(async () => {
       bridge.plus.tick();
       return readAccount(dataDir)?.room === secrets.room;

@@ -52,6 +52,12 @@ import { sendPush, type VapidKeys } from "./webpush";
 import type { RoomNamespace, RoomStub } from "../env";
 
 export type RelayEnv = {
+  /**
+   * "1": any room may be created by its writer (miblo.ai's behaviour, and the protocol suite's).
+   * Otherwise (a self-hosted server) a writer is accepted only in a room a linked computer of the
+   * account registered first (op "allow", devices.ts registerRoom): the server is no open relay.
+   */
+  RELAY_OPEN_ROOMS?: string;
   /** The server's origin: the push subject when RELAY_VAPID_SUBJECT is not set. */
   PUBLIC_ORIGIN?: string;
   RELAY_VAPID_PUBLIC_KEY?: string;
@@ -179,6 +185,8 @@ export class RelayRoom {
   private alarmAt: number | null = null;
   private lastSeenWritten = 0;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A linked computer registered this room (self-hosted servers accept no other writer). */
+  private allowed = false;
   /** Per-socket frame counters for the rate limit (lost on hibernation, which needs idleness). */
   private rate = new WeakMap<RoomSocket, { second: number; n: number }>();
   private upRate = new WeakMap<RoomSocket, { second: number; n: number }>();
@@ -197,6 +205,7 @@ export class RelayRoom {
       this.persistedAt = this.frame?.at ?? 0;
       this.lastSeenWritten = this.meta.lastSeen ?? 0;
       this.alarmAt = await ctx.storage.getAlarm();
+      this.allowed = (await ctx.storage.get<boolean>("allowed")) === true;
     });
     // Keep-alive pings answered without waking the object.
     runtime.autoPong(ctx, '{"t":"ping"}', '{"t":"pong"}');
@@ -230,7 +239,7 @@ export class RelayRoom {
         phones: request.headers.get("X-Phones") ?? "",
         ck,
       });
-      if (verdict !== "ok") return new Response(verdict, { status: verdict === "not ready" ? 403 : verdict === "too many rooms" ? 429 : 401 });
+      if (verdict !== "ok") return new Response(verdict, { status: verdict === "not ready" || verdict === "not registered" ? 403 : verdict === "too many rooms" ? 429 : 401 });
     } else {
       const cap = role === "writer" ? LIMITS.maxPendingWriters : LIMITS.maxPendingReaders;
       if (this.sockets(role).filter((ws) => !this.attachment(ws)?.authed).length >= cap) {
@@ -392,13 +401,15 @@ export class RelayRoom {
     token: string,
     readHash: unknown,
     { phones, phone, ck }: { phones?: unknown; phone?: string; ck?: string } = {},
-  ): Promise<"ok" | "unauthorized" | "not ready" | "too many rooms"> {
+  ): Promise<"ok" | "unauthorized" | "not ready" | "too many rooms" | "not registered"> {
     if (role === "writer") {
       if (!isDigest(readHash)) return "unauthorized";
       const list = parsePhones(phones ?? "");
       if (!list) return "unauthorized";
       if (!sameString(await deriveRoom(token), room)) return "unauthorized";
       if (this.meta.createdAt === undefined) {
+        // A self-hosted server is no open relay: only rooms its linked computers registered.
+        if (this.env.RELAY_OPEN_ROOMS !== "1" && !this.allowed) return "not registered";
         if (!(await this.newRoomAllowed(ck))) return "too many rooms";
         if (ck) this.meta.nets = ck.split(",");
       }
@@ -550,11 +561,24 @@ export class RelayRoom {
    */
   private async plusRequest(request: Request): Promise<Response> {
     if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
-    let body: { op?: unknown; plan?: unknown; until?: unknown; challenge?: unknown; proof?: unknown; account?: unknown };
+    let body: { op?: unknown; plan?: unknown; until?: unknown; challenge?: unknown; proof?: unknown; account?: unknown; allowed?: unknown };
     try {
       body = (await request.json()) as typeof body;
     } catch {
       return new Response("bad request", { status: 400 });
+    }
+    // {"op":"allow","allowed":true|false}: a linked computer registered this room (its writer may
+    // come), or the computer was unlinked or moved to another room (the room goes).
+    if (body.op === "allow") {
+      if (typeof body.allowed !== "boolean") return new Response("bad request", { status: 400 });
+      if (body.allowed) {
+        this.allowed = true;
+        await this.ctx.storage.put("allowed", true);
+      } else {
+        this.allowed = false;
+        await this.wipe();
+      }
+      return Response.json({ allowed: this.allowed });
     }
     const plan = body.plan === "plus" ? "plus" : body.plan === "free" ? "free" : null;
     const until = body.until === undefined || body.until === null ? undefined : Number(body.until);
@@ -1009,6 +1033,8 @@ export class RelayRoom {
     this.lastSeenWritten = 0;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
+    // A registered room stays registered (its owner may come back after an idle cleanup).
+    if (this.allowed) await this.ctx.storage.put("allowed", true);
   }
 
   private nextDeadline(now: number): number | null {

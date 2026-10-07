@@ -39,7 +39,7 @@ const fmt = (lang: Locale, iso: string | null) => {
 export function AccountPage({ lang }: { lang: Locale }) {
   const t = accountStrings(lang);
   const [mfa, setMfa] = useState<MfaState | null>(null);
-  const [setup, setSetup] = useState<{ needed: boolean; available: boolean } | null>(null);
+  const [setup, setSetup] = useState<{ needed: boolean; available: boolean; used?: boolean } | null>(null);
   const [tick, setTick] = useState(0);
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
@@ -49,7 +49,7 @@ export function AccountPage({ lang }: { lang: Locale }) {
       const [m, s] = await Promise.all([loadMfa(), fetch("/api/setup").then((r) => r.json()).catch(() => null)]);
       if (!alive) return;
       setMfa(m ?? { signedIn: false });
-      setSetup(s as { needed: boolean; available: boolean } | null);
+      setSetup(s as { needed: boolean; available: boolean; used?: boolean } | null);
     })();
     return () => {
       alive = false;
@@ -59,7 +59,7 @@ export function AccountPage({ lang }: { lang: Locale }) {
   const next = nextTarget();
   let body: React.ReactNode;
   if (!mfa || !setup) body = <div aria-busy="true" className="h-40 animate-pulse rounded-2xl bg-bg-2" />;
-  else if (!mfa.signedIn) body = setup.needed ? <SetupForm t={t} lang={lang} available={setup.available} onDone={reload} /> : <SignIn t={t} onDone={reload} />;
+  else if (!mfa.signedIn) body = setup.needed ? <SetupForm t={t} lang={lang} available={setup.available} used={!!setup.used} onDone={reload} /> : <SignIn t={t} onDone={reload} />;
   else if (mfa.pending || (mfa.mfa?.enrolled && !mfa.mfa.valid))
     body = (
       <section className={card}>
@@ -114,7 +114,7 @@ export function AccountPage({ lang }: { lang: Locale }) {
   );
 }
 
-function SetupForm({ t, lang, available, onDone }: { t: AccountStrings; lang: Locale; available: boolean; onDone: () => void }) {
+function SetupForm({ t, lang, available, used, onDone }: { t: AccountStrings; lang: Locale; available: boolean; used: boolean; onDone: () => void }) {
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -122,6 +122,7 @@ function SetupForm({ t, lang, available, onDone }: { t: AccountStrings; lang: Lo
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   if (!available) return <section className={card}><p>{t.setupUnavailable}</p></section>;
+  if (used) return <section className={card}><p>{t.errors.setup_token_used}</p></section>;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (password !== again) return setMsg(t.passwordsDiffer);

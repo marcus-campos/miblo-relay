@@ -34,7 +34,8 @@ export function contentSecurityPolicy(origin: URL): string {
     // allows WebAssembly compilation only, never eval() or an inline script.
     "script-src 'self' 'wasm-unsafe-eval'",
     "script-src-attr 'none'",
-    "style-src 'self' 'unsafe-inline'",
+    // No 'unsafe-inline': the app's styles are files; React's style props go through the CSSOM.
+    "style-src 'self'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     // The relay WebSocket ('self' covers it in CSP3 browsers; older Safari needs it named).

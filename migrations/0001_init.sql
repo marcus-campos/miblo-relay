@@ -13,6 +13,12 @@ CREATE TABLE users (
   updated_at TEXT NOT NULL
 );
 
+-- Setup tokens already used (SHA-256): each works for one setup only.
+CREATE TABLE setup_tokens_used (
+  token_hash TEXT PRIMARY KEY,
+  used_at TEXT NOT NULL
+);
+
 -- Sessions (revocable): the cookie carries the id and an HMAC; only the id's SHA-256 is here.
 -- mfa_at/mfa_method/mfa_cred: when and how this session last passed the second factor.
 CREATE TABLE sessions (

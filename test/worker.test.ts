@@ -58,12 +58,12 @@ describe("the Worker (Deploy to your own Cloudflare)", () => {
     expect(setup.headers.get("set-cookie")).toMatch(/miblo_session=.*; Secure/);
     const start = await call("/api/plus/device/start", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.7" }, body: JSON.stringify({ name: "Mac", platform: "darwin" }) });
     expect(start.data.verification_uri).toBe(`${ORIGIN}/plus/link`);
-    // A writer upgrade reaches the room's Durable Object.
+    // A writer upgrade reaches the room's Durable Object, which refuses a room no linked computer
+    // registered (no open relay).
     const w = crypto.randomBytes(32).toString("base64url");
     const room = crypto.createHash("sha256").update(`miblo-room-v2|${w}`).digest("base64url").slice(0, 22);
     const res = (await mf.dispatchFetch(`${ORIGIN}/api/relay/${room}?role=writer`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${w}`, "X-Read-Hash": crypto.createHash("sha256").update("r").digest("base64url") } })) as unknown as Response & { webSocket: unknown };
-    expect(res.status).toBe(101);
-    expect(res.webSocket).toBeTruthy();
+    expect(res.status).toBe(403);
     // Unknown pages are 404 without an assets binding; pages redirect as on Node.
     expect((await mf.dispatchFetch(`${ORIGIN}/app`, { redirect: "manual" } as never)).status).toBe(308);
   });

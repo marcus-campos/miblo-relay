@@ -4,7 +4,7 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { adminWithTotp, Browser, ORIGIN, SETUP_TOKEN, startServer, totpNow } from "./helpers/server";
+import { adminWithTotp, Browser, ORIGIN, protectWithTotp, SETUP_TOKEN, startServer, totpNow } from "./helpers/server";
 import { SoftWebAuthn } from "./helpers/soft-webauthn";
 import { resetLimits } from "../server/core/http";
 
@@ -67,9 +67,11 @@ describe("setup and signing in", () => {
     // The setup session has no factor yet: the phone registry refuses it.
     await b.refreshCsrf();
     expect((await b.get("/api/phones")).data.error).toBe("mfa_setup_required");
-    // An abandoned setup can be redone with the token (whoever started it is signed out).
-    admin = await adminWithTotp(srv.base);
-    expect((await b.get("/api/community/mfa")).data.signedIn).toBe(false);
+    // A setup token works once: nobody redoes the setup with it (a token seen in a log is spent).
+    expect((await new Browser(srv.base).post("/api/setup", { token: SETUP_TOKEN, username: "eve", password: "another long password" })).data.error).toBe("setup_token_used");
+    expect((await json("/api/setup")).data).toMatchObject({ needed: true, available: true, used: true });
+    // The setup session itself finishes it with a second factor.
+    admin = await protectWithTotp(b);
     // Now the account is protected: setup is closed for good.
     expect((await new Browser(srv.base).post("/api/setup", { token: SETUP_TOKEN, username: "eve", password: "another long password" })).status).toBe(409);
     expect((await json("/api/setup")).data.needed).toBe(false);
@@ -118,16 +120,22 @@ describe("setup and signing in", () => {
     expect(st).toMatchObject({ signedIn: true, pending: false, mfa: { enrolled: true, valid: true } });
   });
 
-  it("locks the password after five wrong tries, from any address (TRUSTED_PROXY: the last X-Forwarded-For entry, the one the proxy added)", async () => {
+  it("locks the password after five wrong tries for the network they came from, with the same 401 as a wrong name (TRUSTED_PROXY: the last X-Forwarded-For entry, the one the proxy added)", async () => {
     resetLimits();
-    const own = await startServer({ TRUSTED_PROXY: "1" });
+    const own = await startServer({ TRUSTED_PROXY: "127.0.0.1/32, ::1" });
     try {
       const a = await adminWithTotp(own.base);
-      const from = (ip: string, password: string) =>
-        fetch(own.base + "/api/community/auth/password", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `10.9.9.9, ${ip}` }, body: JSON.stringify({ username: a.username, password }) }).then(async (r) => ({ status: r.status, data: (await r.json()) as { error?: string } }));
-      for (let i = 0; i < 5; i++) expect((await from(`203.0.113.${i + 1}`, `wrong-password-${i}`)).status).toBe(401);
-      // The right password from yet another address: the account is locked for a while.
-      expect((await from("203.0.113.99", a.password)).data.error).toBe("locked");
+      const from = (ip: string, password: string, username = a.username) =>
+        fetch(own.base + "/api/community/auth/password", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `10.9.9.9, ${ip}` }, body: JSON.stringify({ username, password }) }).then(async (r) => ({ status: r.status, data: (await r.json()) as { error?: string } }));
+      // Five wrong tries from one IPv6 /64 (any address inside it): that network is locked.
+      for (let i = 0; i < 5; i++) expect((await from(`2001:db8:1:2::${i + 1}`, `wrong-password-${i}`)).status).toBe(401);
+      const locked = await from("2001:db8:1:2:ffff::9", a.password);
+      const unknown = await from("2001:db8:1:2::1", "whatever-password", "nobody");
+      // Locked, a wrong name: one answer (nothing tells the name exists or that it is locked).
+      expect(locked).toEqual({ status: 401, data: { error: "bad_credentials" } });
+      expect(unknown).toEqual(locked);
+      // The owner's own network still signs in: a stranger cannot keep the owner out.
+      expect((await from("203.0.113.99", a.password)).status).toBe(200);
       // Without TRUSTED_PROXY the header is ignored: every try counts against the socket's address.
       let last = 0;
       for (let i = 0; i < 11; i++) last = (await fetch(srv.base + "/api/community/auth/password", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `198.51.100.${i}` }, body: JSON.stringify({ username: "x", password: "y" }) })).status;
@@ -175,20 +183,27 @@ describe("linked computers and the phone registry", () => {
     expect(me.data).toMatchObject({ plan: "plus", valid_until: null, device: { id: deviceId } });
   }, 15_000);
 
-  it("registers the computer's room with a proof of its write token, checked by the room", async () => {
-    // The plugin connects as the room's writer first (header auth).
-    writer = new WebSocket(`${srv.base.replace("http", "ws")}/api/relay/${room}?role=writer`, { headers: { authorization: `Bearer ${writeToken}`, "x-read-hash": sha(readToken), "x-phones": "" } });
-    await new Promise((resolve, reject) => {
-      writer!.once("open", resolve);
-      writer!.once("error", reject);
+  it("refuses a stranger's room (no open relay), and registers the computer's room with a proof of its write token", async () => {
+    const ws = (wt: string, rm: string) => new WebSocket(`${srv.base.replace("http", "ws")}/api/relay/${rm}?role=writer`, { headers: { authorization: `Bearer ${wt}`, "x-read-hash": sha(readToken), "x-phones": "" } });
+    const outcome = (sock: WebSocket) => new Promise<number>((resolve) => {
+      sock.once("open", () => resolve(101));
+      sock.once("unexpected-response", (_q, r) => resolve(r.statusCode ?? 0));
     });
+    // A stranger with its own write token: refused, the room never exists.
+    const strangerToken = b64(32);
+    expect(await outcome(ws(strangerToken, sha(`miblo-room-v2|${strangerToken}`).slice(0, 22)))).toBe(403);
+    // This computer's room before it is registered: refused too.
+    expect(await outcome(ws(writeToken, room))).toBe(403);
+    const proofFor = (secret: string, challenge: unknown) => crypto.createHmac("sha256", crypto.createHash("sha256").update(secret).digest()).update(String(challenge)).digest("base64url");
+    // Registering it first allows it (the writer has not connected: the claim waits).
+    const ch0 = await json("/api/plus/rooms/challenge", bearer(token, "POST", { room }));
+    expect((await json("/api/plus/rooms", bearer(token, "POST", { room, challenge: ch0.data.challenge, proof: proofFor(writeToken, ch0.data.challenge) }))).data.error).toBe("room_not_ready");
+    writer = ws(writeToken, room);
+    expect(await outcome(writer)).toBe(101);
     const ch = await json("/api/plus/rooms/challenge", bearer(token, "POST", { room }));
-    expect(ch.status).toBe(200);
-    const proof = (secret: string) => crypto.createHmac("sha256", crypto.createHash("sha256").update(secret).digest()).update(String(ch.data.challenge)).digest("base64url");
-    expect((await json("/api/plus/rooms", bearer(token, "POST", { room, challenge: ch.data.challenge, proof: proof(b64(32)) }))).status).toBe(403);
+    expect((await json("/api/plus/rooms", bearer(token, "POST", { room, challenge: ch.data.challenge, proof: proofFor(b64(32), ch.data.challenge) }))).status).toBe(403);
     const ch2 = await json("/api/plus/rooms/challenge", bearer(token, "POST", { room }));
-    const proof2 = crypto.createHmac("sha256", crypto.createHash("sha256").update(writeToken).digest()).update(String(ch2.data.challenge)).digest("base64url");
-    const reg = await json("/api/plus/rooms", bearer(token, "POST", { room, challenge: ch2.data.challenge, proof: proof2 }));
+    const reg = await json("/api/plus/rooms", bearer(token, "POST", { room, challenge: ch2.data.challenge, proof: proofFor(writeToken, ch2.data.challenge) }));
     expect(reg.data).toEqual({ room, plan: "plus", until: null });
   });
 
@@ -238,5 +253,40 @@ describe("linked computers and the phone registry", () => {
     expect((list.data.devices as { id: string }[]).map((d) => d.id)).toContain(deviceId);
     expect((await json("/api/plus/device/unlink", bearer(token, "POST", {}))).status).toBe(200);
     expect((await json("/api/plus/me", bearer(token))).status).toBe(401);
+  });
+});
+
+describe("hardening (security audit, Lows)", () => {
+  it("never lets parallel removals take the account down to no second factor", async () => {
+    resetLimits();
+    const own = await startServer();
+    try {
+      const a = await adminWithTotp(own.base);
+      const auth = new SoftWebAuthn();
+      const o = await a.browser.post("/api/community/mfa/passkey/options", { purpose: "register" });
+      const made = auth.create({ challenge: String(o.data.challenge), rpId: "localhost", origin: ORIGIN });
+      expect((await a.browser.post("/api/community/mfa/passkey/register", { name: "Laptop", ...made, prf: false })).status).toBe(200);
+      const st = await a.browser.refreshCsrf();
+      const pk = (st.factors as { passkeys: { id: string }[] }).passkeys[0].id;
+      const [t, p] = await Promise.all([a.browser.post("/api/community/mfa/totp/remove", {}), a.browser.post("/api/community/mfa/passkey/remove", { id: pk })]);
+      expect([t.status, p.status].sort()).toEqual([200, 409]);
+      const after = (await a.browser.refreshCsrf()).factors as { passkeys: unknown[]; totp: boolean };
+      expect(after.passkeys.length + (after.totp ? 1 : 0)).toBe(1);
+    } finally {
+      await own.app.close();
+    }
+  });
+
+  it("names the session cookie __Host- over https only", async () => {
+    const { sessionCookie, clearSessionCookie } = await import("../server/core/account/sessions");
+    expect(sessionCookie("v", "https://relay.example.com")).toMatch(/^__Host-miblo_session=v; Path=\/; HttpOnly; SameSite=Lax; .*; Secure$/);
+    expect(clearSessionCookie("https://relay.example.com")).toMatch(/^__Host-miblo_session=; /);
+    expect(sessionCookie("v", "http://localhost")).toMatch(/^miblo_session=v; /);
+  });
+
+  it("serves a CSP without inline styles", async () => {
+    const r = await fetch(srv.base + "/conta");
+    expect(r.headers.get("content-security-policy")).toMatch(/style-src 'self';/);
+    expect(r.headers.get("content-security-policy")).not.toMatch(/unsafe-inline/);
   });
 });

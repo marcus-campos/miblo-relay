@@ -54,6 +54,12 @@ export async function factorsOf(scope: RequestScope, uid: string): Promise<Facto
   };
 }
 
+// SQL conditions for a removal that must leave the account (?1) a second factor.
+/** Passkey ?2 goes: another passkey or a confirmed authenticator app stays. */
+const KEEPS_FACTOR_WITHOUT_PASSKEY = `(EXISTS (SELECT 1 FROM mfa_passkeys WHERE user_id = ?1 AND id != ?2) OR EXISTS (SELECT 1 FROM mfa_totp WHERE user_id = ?1 AND confirmed_at IS NOT NULL))`;
+/** The authenticator app goes: a passkey stays. */
+const KEEPS_FACTOR_WITHOUT_TOTP = `EXISTS (SELECT 1 FROM mfa_passkeys WHERE user_id = ?1)`;
+
 const factorCount = (f: Factors) => f.passkeys.length + (f.totp ? 1 : 0);
 
 /** Whether the account has a second factor (then every new session must pass it). */
@@ -288,7 +294,10 @@ export async function removePasskey(scope: RequestScope, session: Session, id: s
   const row = await scope.env.DB.prepare(`SELECT 1 FROM mfa_passkeys WHERE id = ? AND user_id = ?`).bind(id, uid).first();
   if (!row) return { ok: false, reason: "not_found" };
   if (await lastRequiredFactor(scope, uid)) return { ok: false, reason: "last_factor" };
-  await scope.env.DB.prepare(`DELETE FROM mfa_passkeys WHERE id = ? AND user_id = ?`).bind(id, uid).run();
+  // The check again, inside the one statement that deletes: two removals at once can never take
+  // the account down to no second factor.
+  const gone = await scope.env.DB.prepare(`DELETE FROM mfa_passkeys WHERE user_id = ?1 AND id = ?2 AND ${KEEPS_FACTOR_WITHOUT_PASSKEY}`).bind(uid, id).run();
+  if (!gone.meta.changes) return { ok: false, reason: "last_factor" };
   // Sign-ins that passed the second factor with it end (a lost or stolen device keeps nothing),
   // except the one removing it.
   await scope.env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? AND mfa_cred = ? AND id_hash != ?`).bind(uid, id, session.idHash).run();
@@ -477,7 +486,9 @@ export async function totpRemove(scope: RequestScope, session: Session): Promise
   const f = await factorsOf(scope, session.user.id);
   if (!f.totp) return { ok: false, reason: "not_found" };
   if (await lastRequiredFactor(scope, session.user.id)) return { ok: false, reason: "last_factor" };
-  await scope.env.DB.prepare(`DELETE FROM mfa_totp WHERE user_id = ?`).bind(session.user.id).run();
+  // As for a passkey: the check is part of the delete (parallel removals keep one factor).
+  const gone = await scope.env.DB.prepare(`DELETE FROM mfa_totp WHERE user_id = ?1 AND ${KEEPS_FACTOR_WITHOUT_TOTP}`).bind(session.user.id).run();
+  if (!gone.meta.changes) return { ok: false, reason: "last_factor" };
   await notify(scope, session, "totp_removed");
   return { ok: true };
 }

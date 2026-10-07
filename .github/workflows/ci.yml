@@ -11,8 +11,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -27,16 +27,16 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # The same Node major as the image, so the plain build's hash can match the image's.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
       - run: docker build -t miblo-relay:ci .
       - name: Smoke test
         run: |
-          docker run -d --name relay -p 8787:8787 -e PUBLIC_ORIGIN=http://localhost:8787 -e MIBLO_RELAY_DEV=1 --read-only --tmpfs /tmp -v relay-data:/data miblo-relay:ci
+          docker run -d --name relay -p 8787:8787 -e PUBLIC_ORIGIN=http://localhost:8787 -e MIBLO_RELAY_DEV=1 --read-only --tmpfs /tmp -v relay-data:/data -v relay-secrets:/secrets miblo-relay:ci
           for i in $(seq 1 20); do curl -fs localhost:8787/.well-known/miblo-relay.json && break; sleep 1; done
           curl -fs localhost:8787/app/ > /dev/null
           docker logs relay | grep -q "Server identity fingerprint"

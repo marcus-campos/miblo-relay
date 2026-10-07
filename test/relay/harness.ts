@@ -53,7 +53,7 @@ export async function workerdHarness(): Promise<Harness> {
       script: out.outputFiles[0].text,
       compatibilityDate: "2026-09-01",
       durableObjects: { RELAY: { className: "TestRelayRoom", useSQLite: true } },
-      bindings: { RELAY_VAPID_PUBLIC_KEY: keys.publicKey, RELAY_VAPID_PRIVATE_KEY: keys.privateKey, RELAY_VAPID_SUBJECT: "https://relay.test", RELAY_RATE_LIMIT: "100000" },
+      bindings: { RELAY_VAPID_PUBLIC_KEY: keys.publicKey, RELAY_VAPID_PRIVATE_KEY: keys.privateKey, RELAY_VAPID_SUBJECT: "https://relay.test", RELAY_RATE_LIMIT: "100000", RELAY_OPEN_ROOMS: "1" },
       outboundService: async (req: Request) => {
         const body = new Uint8Array(await req.arrayBuffer());
         pushed.push({ url: req.url, headers: Object.fromEntries(req.headers), body });
@@ -90,7 +90,7 @@ export async function nodeHarness(): Promise<Harness> {
     return realFetch(input as RequestInfo, init);
   }) as typeof fetch;
   const db = new SqliteDb(":memory:");
-  const rooms = new NodeRooms(db, { RELAY_VAPID_PUBLIC_KEY: keys.publicKey, RELAY_VAPID_PRIVATE_KEY: keys.privateKey, RELAY_VAPID_SUBJECT: "https://relay.test" }, TestRelayRoom);
+  const rooms = new NodeRooms(db, { RELAY_VAPID_PUBLIC_KEY: keys.publicKey, RELAY_VAPID_PRIVATE_KEY: keys.privateKey, RELAY_VAPID_SUBJECT: "https://relay.test", RELAY_OPEN_ROOMS: "1" }, TestRelayRoom);
   const env = { ...rooms.env, RELAY: rooms, RELAY_RATE_LIMIT: "100000" } as RelayRouterEnv;
 
   const toRequest = (req: http.IncomingMessage, body: Buffer | null) => {

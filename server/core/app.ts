@@ -17,7 +17,7 @@ import { identityDocument, signIdentity } from "./identity";
 import * as S from "./schemas";
 import { accountActionLimited, anonymousRequest, deviceRequest, memberRequest, mfaBlock, mfaRequest, sessionForGet } from "./route";
 import { clearSessionCookie, createSession, listSessions, revokeListedSession, revokeSession, revokeUserSessions, sessionCookie, sessionFromCookie } from "./account/sessions";
-import { changePassword, passwordSignIn, runSetup, setupNeeded } from "./account/account";
+import { changePassword, passwordSignIn, runSetup, setupNeeded, setupTokenUsed } from "./account/account";
 import {
   assertionOptions,
   factorsOf,
@@ -94,13 +94,13 @@ const ROUTES: Route[] = [
   }),
 
   // --- setup and signing in ---
-  route("GET", "/api/setup", async (scope) => json({ needed: await setupNeeded(scope), available: !!scope.env.SETUP_TOKEN })),
+  route("GET", "/api/setup", async (scope) => json({ needed: await setupNeeded(scope), available: !!scope.env.SETUP_TOKEN, used: !!scope.env.SETUP_TOKEN && (await setupTokenUsed(scope, scope.env.SETUP_TOKEN)) })),
   route("POST", "/api/setup", async (scope, request) => {
     if (limited(`setup:${clientNetwork(clientIp(request))}`, 5)) return tooMany();
     const p = await body(request, S.setupSchema);
     if (!p.ok) return p.response;
     const out = await runSetup(scope, p.data);
-    if (!out.ok) return error(out.error, out.error === "bad_token" ? 403 : out.error === "setup_closed" ? 409 : out.error === "setup_unavailable" ? 503 : 400);
+    if (!out.ok) return error(out.error, out.error === "bad_token" ? 403 : out.error === "setup_closed" || out.error === "setup_token_used" ? 409 : out.error === "setup_unavailable" ? 503 : 400);
     const cookie = await createSession(scope, out.uid, request.headers.get("user-agent") ?? "");
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(cookie, publicOrigin(scope.env)!.origin) });
   }),
@@ -108,8 +108,8 @@ const ROUTES: Route[] = [
     if (limited(`signin:${clientNetwork(clientIp(request))}`, 10)) return tooMany();
     const p = await body(request, S.passwordSignInSchema);
     if (!p.ok) return p.response;
-    const out = await passwordSignIn(scope, p.data.username, p.data.password);
-    if (!out.ok) return error(out.error, out.error === "locked" ? 429 : out.error === "finish_setup" ? 409 : 401);
+    const out = await passwordSignIn(scope, p.data.username, p.data.password, clientNetwork(clientIp(request)));
+    if (!out.ok) return error(out.error, out.error === "finish_setup" ? 409 : 401);
     const cookie = await createSession(scope, out.uid, request.headers.get("user-agent") ?? "");
     return json({ ok: true, next: "mfa" }, 200, { "Set-Cookie": sessionCookie(cookie, publicOrigin(scope.env)!.origin) });
   }),

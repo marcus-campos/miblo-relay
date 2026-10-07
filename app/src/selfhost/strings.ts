@@ -4,6 +4,7 @@ import type { Locale } from "@/lib/i18n";
 const errorsPt: Record<string, string> = {
   bad_token: "Código de configuração errado. Ele aparece no registro (log) do servidor na primeira vez que ele sobe.",
   setup_closed: "A conta deste servidor já existe. Entre com ela.",
+  setup_token_used: "Este código de configuração já foi usado. Gere um novo no servidor: node dist/server.mjs setup-token (Docker: docker compose exec relay node dist/server.mjs setup-token).",
   setup_unavailable: "Este servidor não tem um código de configuração (SETUP_TOKEN).",
   password_too_short: "A senha precisa ter pelo menos 12 caracteres.",
   password_too_long: "Senha longa demais.",
@@ -18,6 +19,7 @@ const errorsPt: Record<string, string> = {
 const errorsEn: Record<string, string> = {
   bad_token: "Wrong setup token. It is printed in the server's log the first time it starts.",
   setup_closed: "This server's account already exists. Sign in with it.",
+  setup_token_used: "This setup token was already used. Make a new one on the server: node dist/server.mjs setup-token (Docker: docker compose exec relay node dist/server.mjs setup-token).",
   setup_unavailable: "This server has no setup token (SETUP_TOKEN).",
   password_too_short: "The password needs at least 12 characters.",
   password_too_long: "Password too long.",
