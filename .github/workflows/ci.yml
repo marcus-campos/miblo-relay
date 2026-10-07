@@ -28,6 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The same Node major as the image, so the plain build's hash can match the image's.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
       - run: docker build -t miblo-relay:ci .
       - name: Smoke test
         run: |
