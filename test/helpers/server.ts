@@ -1,6 +1,7 @@
 // A real self-hosted server for tests (the Node runtime, in memory, on a random port) and a
 // browser-like client with a cookie jar and the CSRF token.
 import crypto from "node:crypto";
+import net from "node:net";
 import path from "node:path";
 import { createRelayServer } from "../../server/node/server";
 import { newIdentityKey } from "../../server/core/identity";
@@ -10,11 +11,23 @@ import { totpCode, base32Decode } from "../../server/core/account/mfa";
 export const SETUP_TOKEN = "test-setup-token-0123456789";
 export const ORIGIN = "http://localhost";
 
-export async function startServer(extra: Record<string, string> = {}) {
+/** A free local port (for a server whose PUBLIC_ORIGIN must name its own port). */
+export function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const port = (s.address() as { port: number }).port;
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+export async function startServer(extra: Record<string, string> = {}, opts: { port?: number } = {}) {
   const vapid = await generateVapidKeys();
+  const origin = opts.port ? `http://127.0.0.1:${opts.port}` : ORIGIN;
   const app = await createRelayServer({
     env: {
-      PUBLIC_ORIGIN: ORIGIN,
+      PUBLIC_ORIGIN: origin,
       MIBLO_RELAY_DEV: "1",
       SESSION_SECRET: crypto.randomBytes(40).toString("base64url"),
       MFA_KEY: crypto.randomBytes(32).toString("base64url"),
@@ -28,8 +41,8 @@ export async function startServer(extra: Record<string, string> = {}) {
     migrationsDir: path.join(__dirname, "..", "..", "migrations"),
     publicDir: null,
   });
-  const port = await app.listen(0, "127.0.0.1");
-  return { app, base: `http://127.0.0.1:${port}`, port };
+  const port = await app.listen(opts.port ?? 0, "127.0.0.1");
+  return { app, base: `http://127.0.0.1:${port}`, port, origin };
 }
 
 /** A browser: cookies kept, JSON calls with the CSRF token once known. */
