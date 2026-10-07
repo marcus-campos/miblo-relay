@@ -147,7 +147,7 @@ suite("the plugin against a self-hosted server", () => {
       const g = (await pb.get(`/api/phones/${phone.id}/grants`)).data.grants as Any[];
       return g?.length ? g : null;
     });
-    const opened = phone.trustedOpen(grants[0]);
+    const opened = phone.trustedOpen(grants![0]);
     expect(opened).toMatchObject({ v: 6, kind: "grant", room: secrets.room, key: secrets.key });
 
     // 6. The phone connects to the relay with its own reader token and reads the live snapshot.

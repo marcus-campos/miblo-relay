@@ -118,13 +118,13 @@ describe("setup and signing in", () => {
     expect(st).toMatchObject({ signedIn: true, pending: false, mfa: { enrolled: true, valid: true } });
   });
 
-  it("locks the password after five wrong tries, from any address (TRUSTED_PROXY: the proxy's X-Forwarded-For)", async () => {
+  it("locks the password after five wrong tries, from any address (TRUSTED_PROXY: the last X-Forwarded-For entry, the one the proxy added)", async () => {
     resetLimits();
     const own = await startServer({ TRUSTED_PROXY: "1" });
     try {
       const a = await adminWithTotp(own.base);
       const from = (ip: string, password: string) =>
-        fetch(own.base + "/api/community/auth/password", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `${ip}, 10.0.0.1` }, body: JSON.stringify({ username: a.username, password }) }).then(async (r) => ({ status: r.status, data: (await r.json()) as { error?: string } }));
+        fetch(own.base + "/api/community/auth/password", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `10.9.9.9, ${ip}` }, body: JSON.stringify({ username: a.username, password }) }).then(async (r) => ({ status: r.status, data: (await r.json()) as { error?: string } }));
       for (let i = 0; i < 5; i++) expect((await from(`203.0.113.${i + 1}`, `wrong-password-${i}`)).status).toBe(401);
       // The right password from yet another address: the account is locked for a while.
       expect((await from("203.0.113.99", a.password)).data.error).toBe("locked");

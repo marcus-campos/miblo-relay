@@ -1,0 +1,47 @@
+// "Deploy to your own Cloudflare": the self-hosted Miblo relay as a Worker on YOUR Cloudflare
+// account (the Workers free plan is enough for one person). Copy this file to wrangler.jsonc in
+// this folder and follow the README ("Deploy to your own Cloudflare"):
+//   npx wrangler d1 create miblo-relay          -> put the database_id below
+//   npx wrangler d1 migrations apply miblo-relay --remote
+//   npm run build:app && npm run cf:secrets      -> your secrets (and the setup token)
+//   npx wrangler deploy
+// Everything runs in your account: D1 (the account, linked computers, phones), one Durable Object
+// per relay room, and the phone app's files.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "miblo-relay",
+  "main": "../../server/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  // The phone app and the account page (npm run build:app). The Worker answers every request first
+  // (security headers, the app's routes) and reads the files through the ASSETS binding.
+  "assets": {
+    "directory": "../../dist/public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "miblo-relay",
+      "database_id": "REPLACE_WITH_YOUR_DATABASE_ID",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "RELAY", "class_name": "RelayRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RelayRoom"] }],
+  // Hourly cleanup of expired sessions, codes and challenges.
+  "triggers": { "crons": ["17 * * * *"] },
+  "vars": {
+    // Your Worker's https address: a custom domain (recommended) or https://miblo-relay.<you>.workers.dev
+    "PUBLIC_ORIGIN": "https://relay.example.com",
+    // Optional: a contact for the push services ("mailto:you@example.com").
+    "RELAY_VAPID_SUBJECT": ""
+  }
+  // To serve it on your own domain:
+  // "routes": [{ "pattern": "relay.example.com", "custom_domain": true }]
+}

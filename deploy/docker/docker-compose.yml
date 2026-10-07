@@ -1,0 +1,51 @@
+# The self-hosted Miblo relay behind Caddy (automatic HTTPS with Let's Encrypt).
+#
+#   1. Point a DNS name at this machine (an A/AAAA record), ports 80 and 443 open.
+#   2. cp .env.example .env and set RELAY_DOMAIN (and RELAY_VAPID_SUBJECT).
+#   3. docker compose up -d --build
+#   4. docker compose logs relay   -> the setup token and the identity fingerprint
+#
+# The relay keeps its database and secrets in the relay-data volume: back it up.
+services:
+  relay:
+    build:
+      context: ../..
+    image: miblo-relay:local
+    restart: unless-stopped
+    environment:
+      PUBLIC_ORIGIN: https://${RELAY_DOMAIN:?set RELAY_DOMAIN in .env}
+      # Caddy sets X-Forwarded-For to the client's address; only Caddy can reach this port.
+      TRUSTED_PROXY: "1"
+      RELAY_VAPID_SUBJECT: ${RELAY_VAPID_SUBJECT:-}
+    volumes:
+      - relay-data:/data
+    expose:
+      - "8787"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - relay
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

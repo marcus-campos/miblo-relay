@@ -1,0 +1,9 @@
+# TLS for the Miblo relay: Caddy gets and renews the certificate for RELAY_DOMAIN by itself.
+# WebSocket upgrades (the relay) pass through reverse_proxy as they are.
+{$RELAY_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy relay:8787 {
+		# Caddy replaces any X-Forwarded-For the client sent with the client's own address.
+		header_up X-Forwarded-For {remote_host}
+	}
+}

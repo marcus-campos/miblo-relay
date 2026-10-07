@@ -7,3 +7,4 @@ data/
 .env
 .dev.vars
 coverage/
+deploy/cloudflare/wrangler.jsonc

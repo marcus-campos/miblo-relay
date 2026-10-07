@@ -48,7 +48,7 @@ export type Env = {
   RELAY_VAPID_SUBJECT?: string;
   /** Optional key of the relay's daily network hashes (else derived from the VAPID key). */
   RELAY_IP_KEY?: string;
-  /** "1": the client address is the first X-Forwarded-For entry (behind your own reverse proxy). */
+  /** "1": the client address is the last X-Forwarded-For entry, the one your own reverse proxy added. */
   TRUSTED_PROXY?: string;
   /** "1": development (http on localhost allowed). Never in production. */
   MIBLO_RELAY_DEV?: string;

@@ -60,13 +60,14 @@ export function fileAssets(dir: string | null): Assets {
 
 /**
  * The client's address as the core sees it (CF-Connecting-IP, set here and nowhere else): the
- * socket's, or with TRUSTED_PROXY=1 the first X-Forwarded-For entry your proxy added.
+ * socket's, or with TRUSTED_PROXY=1 the last X-Forwarded-For entry, the one your own proxy added
+ * (earlier entries come from the client and are ignored). Only a rate-limit key.
  */
 export function clientAddress(req: http.IncomingMessage, trustedProxy: boolean): string {
   if (trustedProxy) {
     const xff = req.headers["x-forwarded-for"];
-    const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
-    if (first) return first;
+    const last = (Array.isArray(xff) ? xff.join(",") : xff)?.split(",").map((x) => x.trim()).filter(Boolean).pop();
+    if (last) return last;
   }
   return req.socket.remoteAddress ?? "unknown";
 }

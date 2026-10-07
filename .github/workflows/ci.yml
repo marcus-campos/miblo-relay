@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # The relay suite on workerd (Miniflare) and Node, the API, the Worker. The plugin's
+      # end-to-end test runs when MIBLO_PLUGIN_DIR points at a plugin checkout (skipped otherwise).
+      - run: npm test
+      - run: npm run build
+      - run: npm run hashes | tail -1
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t miblo-relay:ci .
+      - name: Smoke test
+        run: |
+          docker run -d --name relay -p 8787:8787 -e PUBLIC_ORIGIN=http://localhost:8787 -e MIBLO_RELAY_DEV=1 --read-only --tmpfs /tmp -v relay-data:/data miblo-relay:ci
+          for i in $(seq 1 20); do curl -fs localhost:8787/.well-known/miblo-relay.json && break; sleep 1; done
+          curl -fs localhost:8787/app/ > /dev/null
+          docker logs relay | grep -q "Server identity fingerprint"
+      - name: Same build hash as a plain build
+        run: |
+          docker run --rm miblo-relay:ci tail -1 dist/HASHES.txt | tee docker-hash.txt
+          npm ci && npm run build && npm run hashes | tail -1 | tee plain-hash.txt
+          diff docker-hash.txt plain-hash.txt
