@@ -1,4 +1,5 @@
-// Service worker of the Miblo phone app, registered with scope /app/ (and /en/app/).
+// Service worker of the Miblo phone app, registered with scope /app/ (and /en/app/). The same as
+// miblo.ai's, with this build's asset paths (/assets/, /theme.js).
 // Offline shell (the app page and its static files), generic push alerts, and opening the app
 // from an alert. Never touches pages outside its scope.
 const VERSION = "miblo-phone-v2";
@@ -15,10 +16,10 @@ self.addEventListener("install", (event) => {
           const html = await res.clone().text();
           await cache.put(scopePath, res);
           // The page's own scripts, styles and fonts, so the shell opens offline.
-          const assets = [...new Set(html.match(/\/_next\/static\/[^"'\s)]+/g) || [])];
+          const assets = [...new Set(html.match(/\/assets\/[^"'\s)]+/g) || [])];
           await Promise.all(assets.map((url) => cache.add(url).catch(() => {})));
         }
-        await cache.addAll([`${scopePath}manifest.webmanifest`, "/app/icon-192.png", "/app/badge-96.png"]).catch(() => {});
+        await cache.addAll([`${scopePath}manifest.webmanifest`, "/app/icon-192.png", "/app/badge-96.png", "/theme.js"]).catch(() => {});
       } catch {
         // Offline at install: the cache fills on the next visit.
       }
@@ -58,7 +59,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (url.pathname.startsWith("/_next/static/") || /^\/(en\/)?app\/[\w.-]+\.(png|webmanifest)$/.test(url.pathname)) {
+  if (url.pathname.startsWith("/assets/") || url.pathname === "/theme.js" || /^\/(en\/)?app\/[\w.-]+\.(png|webmanifest)$/.test(url.pathname)) {
     // Immutable build files and the app's icons and manifest: cache first.
     event.respondWith(
       (async () => {

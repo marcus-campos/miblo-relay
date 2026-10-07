@@ -611,6 +611,8 @@ export function SecurityPanel({ lang }: { lang: Locale }) {
               </button>
             )}
           </div>
+          {/* Self-hosted server: no pairing vault (a miblo.ai v5 feature); shown only if one exists. */}
+          {state.vault && (
           <div className="grid gap-2">
             <h3 className="font-bold">{t.vault}</h3>
             <p className="text-sm text-ink-2">{t.vaultHint}</p>
@@ -628,6 +630,7 @@ export function SecurityPanel({ lang }: { lang: Locale }) {
               </button>
             )}
           </div>
+          )}
         </div>
       </details>
 

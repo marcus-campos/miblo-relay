@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Miblo relay</title>
+    <link rel="icon" href="/app/icon-192.png" sizes="192x192" type="image/png" />
+    <script src="/theme.js"></script>
+  </head>
+  <body class="min-h-dvh antialiased">
+    <main class="mx-auto grid max-w-2xl gap-5 px-4 py-12">
+      <p class="font-display text-sm uppercase tracking-wider text-ink-2">Miblo relay <span id="version"></span></p>
+      <h1 class="t-h2">A self-hosted Miblo server</h1>
+      <p>This server relays Miblo sessions between a computer and its owner's phones, end-to-end encrypted: it only ever sees ciphertext.</p>
+      <p>Este servidor repassa as sessões do Miblo entre um computador e os celulares do dono, cifradas de ponta a ponta: ele só vê dados cifrados.</p>
+      <div class="flex flex-wrap gap-2">
+        <a class="btn btn-primary" href="/app/">Abrir o app (pt-BR)</a>
+        <a class="btn btn-ghost" href="/en/app/">Open the app (English)</a>
+        <a class="btn btn-ghost" href="/conta">Conta / Account</a>
+      </div>
+      <section class="grid gap-1 rounded-2xl border-2 border-line bg-surface p-5">
+        <h2 class="font-bold">Server identity / Identidade do servidor</h2>
+        <p class="font-mono text-sm break-all" id="fingerprint">…</p>
+        <p class="text-sm text-ink-2">`miblo server set` shows this fingerprint. Compare it with the one this server printed in its own log when it started (not with this page: a page can be faked, your server's log cannot).</p>
+      </section>
+    </main>
+    <script type="module" src="/entries/landing.ts"></script>
+  </body>
+</html>

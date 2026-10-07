@@ -118,6 +118,11 @@ export function clientIp(request: Request): string {
 // The rate limiter: a fixed window per key, in memory.
 const windows = new Map<string, { start: number; count: number }>();
 
+/** Forgets every count (tests). */
+export function resetLimits(): void {
+  windows.clear();
+}
+
 export function memoryLimit(key: string, limit: number, periodMs = 60_000, now = Date.now()): boolean {
   const w = windows.get(key);
   if (!w || now - w.start >= periodMs) {
