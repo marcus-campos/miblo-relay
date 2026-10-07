@@ -95,6 +95,7 @@ export async function revokePhone(scope: RequestScope, userId: string, id: strin
   await scope.env.DB.batch([
     scope.env.DB.prepare(`DELETE FROM phone_grants WHERE phone_id = ?`).bind(id),
     scope.env.DB.prepare(`DELETE FROM phone_requests WHERE phone_id = ?`).bind(id),
+    bumpRev(scope, id),
   ]);
   return row;
 }
@@ -208,7 +209,7 @@ export async function putGrant(scope: RequestScope, device: LinkedDevice, phoneI
     .bind(device.id, phoneId, g.room, g.epoch, g.epk, g.iv, g.ct, g.cpub, g.sig, ts)
     .run();
   // The person allowed it on that computer: its request is answered.
-  await scope.env.DB.prepare(`DELETE FROM phone_requests WHERE device_id = ? AND phone_id = ?`).bind(device.id, phoneId).run();
+  await scope.env.DB.batch([scope.env.DB.prepare(`DELETE FROM phone_requests WHERE device_id = ? AND phone_id = ?`).bind(device.id, phoneId), bumpRev(scope, phoneId)]);
   return { ok: true };
 }
 
@@ -232,6 +233,7 @@ export async function putRequest(scope: RequestScope, device: LinkedDevice, phon
     )
       .bind(device.id, phoneId, r.state, ts)
       .run();
+    await bumpRev(scope, phoneId).run();
     return { ok: true };
   }
   // The same round: its expiry, and the computer's nonce only once the phone answered. A new
@@ -249,6 +251,7 @@ export async function putRequest(scope: RequestScope, device: LinkedDevice, phon
   )
     .bind(device.id, phoneId, new Date(expires).toISOString(), r.commit, r.cpub, r.nonce ?? null, ts)
     .run();
+  await bumpRev(scope, phoneId).run();
   return { ok: true };
 }
 
@@ -318,6 +321,16 @@ export function nudgeComputersLater(scope: RequestScope, userId: string): void {
   scope.waitUntil(nudgeComputers(scope, userId));
 }
 
+/** The phone's change counter moves: what it reads (requests, grants) may have changed. */
+export function bumpRev(scope: RequestScope, phoneId: string) {
+  return scope.env.DB.prepare(`UPDATE account_phones SET rev = rev + 1 WHERE id = ?`).bind(phoneId);
+}
+
+/** Every phone of the account (a computer was unlinked: its grants and requests went). */
+export function bumpAccountRevs(scope: RequestScope, userId: string) {
+  return scope.env.DB.prepare(`UPDATE account_phones SET rev = rev + 1 WHERE user_id = ?`).bind(userId);
+}
+
 /** How long GET /api/phones/<id>/grants?wait= holds the answer at most, and how often it looks. */
 export const GRANTS_WAIT_MS = 20_000;
 export const GRANTS_CHECK_MS = 500;
@@ -332,7 +345,10 @@ async function sigOf(v: unknown): Promise<string> {
  * One phone's grants and requests (as grantsFor and requestsFor give them) and `sig`, a digest of
  * both. With `since` (the sig the phone last saw), the answer waits until they change or `waitMs`
  * passed (a long poll: the phone sees a computer's next step within about GRANTS_CHECK_MS, with
- * one request instead of one a second). -> null when the phone is not the account's.
+ * one request instead of one a second). While it waits it reads only the phone's change counter
+ * (`rev`, one primary-key read per GRANTS_CHECK_MS) and reads everything again only when it moved.
+ * A write that forgot to move it only delays the answer to the end of the wait.
+ * -> null when the phone is not the account's.
  */
 export async function waitForGrants(
   scope: RequestScope,
@@ -346,11 +362,18 @@ export async function waitForGrants(
     const requests = await requestsFor(scope, userId, phoneId);
     return { grants, requests, sig: await sigOf({ grants, requests }) };
   };
+  const rev = async () =>
+    (await scope.env.DB.prepare(`SELECT rev FROM account_phones WHERE id = ? AND user_id = ?`).bind(phoneId, userId).first<{ rev: number }>())?.rev ?? null;
+  if (!since || !SIG_RE.test(since)) return read();
+  // The counter first: a write between it and the read below is seen by the next look.
+  let seen = await rev();
   let v = await read();
-  if (!since || !SIG_RE.test(since)) return v;
   const end = Date.now() + Math.min(waitMs, GRANTS_WAIT_MS);
   while (v && v.sig === since && Date.now() + checkMs <= end && !signal?.aborted) {
     await new Promise((r) => setTimeout(r, checkMs));
+    const now = await rev();
+    if (now === seen) continue;
+    seen = now;
     v = await read();
   }
   return v;
@@ -359,5 +382,6 @@ export async function waitForGrants(
 export async function deleteGrant(scope: RequestScope, device: LinkedDevice, phoneId: string): Promise<boolean> {
   if (!PHONE_ID_RE.test(phoneId)) return false;
   const r = await scope.env.DB.prepare(`DELETE FROM phone_grants WHERE device_id = ? AND phone_id = ?`).bind(device.id, phoneId).run();
+  if (r.meta.changes > 0) await bumpRev(scope, phoneId).run();
   return r.meta.changes > 0;
 }

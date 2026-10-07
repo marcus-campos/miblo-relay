@@ -23,6 +23,7 @@ import { isRoom } from "./relay/protocol";
 import { clientNetwork, limited } from "./http";
 import { publicOrigin } from "./config";
 import { allowRoom, claimRoom, relayAccount } from "./relay-plan";
+import { bumpAccountRevs } from "./phones";
 
 /** Device authorisation: code lifetime and the minimum polling interval. */
 const DEVICE_CODE_MINUTES = 10;
@@ -320,6 +321,7 @@ export async function removeRoom(scope: RequestScope, device: LinkedDevice, room
   await allowRoom(scope.env, room, false);
   await scope.env.DB.prepare(`DELETE FROM plus_rooms WHERE room = ?`).bind(room).run();
   await scope.env.DB.prepare(`DELETE FROM phone_grants WHERE device_id = ? AND room = ?`).bind(device.id, room).run();
+  await bumpAccountRevs(scope, device.user_id).run();
   return true;
 }
 
@@ -339,6 +341,8 @@ export async function revokeDevice(scope: RequestScope, userId: string, deviceId
   // Protocol v6: the pairings it sealed to the account's phones go with it.
   await DB.prepare(`DELETE FROM phone_grants WHERE device_id = ?`).bind(deviceId).run();
   await DB.prepare(`DELETE FROM phone_requests WHERE device_id = ?`).bind(deviceId).run();
+  // The phones' long polls notice (phones.ts waitForGrants).
+  await bumpAccountRevs(scope, userId).run();
   return true;
 }
 

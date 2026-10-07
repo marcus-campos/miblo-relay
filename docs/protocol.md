@@ -598,8 +598,11 @@ at once) without every linked computer reading the account all the time:
   phone then waits up to 10 minutes for the computer, so update the server with the plugin). A
   bridge without push ignores the frame (an unknown `t`) and keeps reading on its own timer.
 - **The phone's long poll.** `GET /api/phones/<id>/grants` answers with `sig` (a digest of its
-  grants and requests); `?wait=<sig>` holds the answer until they differ (the server looks every
-  500 ms) or 20 s passed, so the phone sees a computer's commitment, nonce and grant about half a
+  grants and requests); `?wait=<sig>` holds the answer until they differ or 20 s passed. While it
+  waits the server reads only the phone's change counter (`account_phones.rev`, one primary-key
+  read every 500 ms, moved by every write that changes what the phone reads: a computer's request
+  or grant, the phone's revocation, a computer unlinked) and reads the grants and requests again
+  only when it moved: about 43 reads per waiting phone per 20 s instead of about 120, so the phone sees a computer's commitment, nonce and grant about half a
   second after it was stored, with one request (and one count against the account's rate limit)
   per change or per 20 s. A `wait` that is not a sig is answered at once.
 - **Measured** (`test/api.test.ts`, this server on Node with a real relay socket and a computer
