@@ -248,6 +248,75 @@ describe("linked computers and the phone registry", () => {
     expect((await phone.get(`/api/phones/${id}/grants`)).status).toBe(404);
   });
 
+  it("v6 push: what the phone does reaches the computer's relay connection as a content-free hint, and the phone's long poll sees each computer step (measured end to end)", async () => {
+    const phone = admin.browser;
+    const hints: number[] = [];
+    const onMessage = (data: Buffer) => {
+      const m = JSON.parse(String(data)) as { t?: string };
+      if (m.t === "phones_changed") {
+        expect(Object.keys(m)).toEqual(["t"]);
+        hints.push(Date.now());
+      }
+    };
+    writer!.on("message", onMessage);
+    const waitHint = async (n: number) => {
+      const end = Date.now() + 3000;
+      while (hints.length < n) {
+        if (Date.now() > end) throw new Error(`no hint ${n}`);
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+    try {
+      const cpub = crypto.createECDH("prime256v1");
+      cpub.generateKeys();
+      const cp = cpub.getPublicKey().toString("base64url");
+      const commit = b64(32);
+      // The computer: on each hint it reads the account's phones and takes its step.
+      const step = async () => {
+        const listed = (await json("/api/plus/phones", bearer(token))).data.phones as { id: string; request?: { commit: string; pnonce: string | null } }[];
+        for (const p of listed) {
+          const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+          if (!p.request) await json(`/api/plus/phones/${p.id}/request`, bearer(token, "PUT", { state: "pending", expiresAt, commit, cpub: cp }));
+          else if (p.request.pnonce) await json(`/api/plus/phones/${p.id}/request`, bearer(token, "PUT", { state: "pending", expiresAt, commit, cpub: cp, nonce: b64(32) }));
+        }
+      };
+      let stepped = 0;
+      const follow = async () => {
+        while (stepped < 2) {
+          await waitHint(stepped + 1);
+          stepped += 1;
+          await step();
+        }
+      };
+      const ecdh = crypto.createECDH("prime256v1");
+      ecdh.generateKeys();
+      const id = b64(16);
+      const t0 = Date.now();
+      const computer = follow();
+      expect((await phone.post("/api/phones", { id, name: "Ana's Pixel", pub: ecdh.getPublicKey().toString("base64url") })).status).toBe(200);
+      let sig: string | null = null;
+      let shown = false;
+      for (let i = 0; i < 10 && !shown; i++) {
+        const v = await phone.get(`/api/phones/${id}/grants${sig ? `?wait=${sig}` : ""}`);
+        sig = String(v.data.sig);
+        expect(sig).toMatch(/^[0-9a-f]{32}$/);
+        const q = (v.data.requests as { state: string; commit: string | null; nonce: string | null }[]).find((r) => r.state === "pending" && r.commit);
+        if (q?.nonce) shown = true;
+        else if (q) expect((await phone.post(`/api/phones/${id}/sas`, { device: deviceId, commit: q.commit, pnonce: b64(32) })).status).toBe(200);
+      }
+      const ms = Date.now() - t0;
+      await computer;
+      expect(shown).toBe(true);
+      expect(ms).toBeLessThan(5000);
+      console.log(`push (self-hosted, Node runtime, real relay socket): phone join -> code in ${ms} ms`);
+      // Revoking it hints again.
+      expect((await phone.post("/api/phones/revoke", { id })).status).toBe(200);
+      await waitHint(3);
+    } finally {
+      writer!.off("message", onMessage);
+    }
+  });
+
   it("unlinking a computer kills its token and frees its rooms", async () => {
     const list = await admin.browser.get("/api/plus/devices");
     expect((list.data.devices as { id: string }[]).map((d) => d.id)).toContain(deviceId);

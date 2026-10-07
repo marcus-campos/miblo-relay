@@ -6,7 +6,9 @@
 //   setup + second factor               the server's one account
 //   miblo account link                  device flow, the code confirmed on the account page
 //   miblo phone on + the bridge          the writer connects (after the identity proof), the room is registered
-//   a phone joins the account            the 6-digit code exchange, `miblo phone approve`, the sealed grant
+//   a phone joins the account            the 6-digit code exchange (pushed: the server's hints, the
+//                                        phone's long poll; join to code timed), `miblo phone approve`,
+//                                        the sealed grant
 //   the phone connects as a reader       and decrypts the live snapshot the bridge sends
 //   miblo phone off                      the room is deleted on this server
 // and nothing at all is sent to miblo.ai.
@@ -130,16 +132,38 @@ suite("the plugin against a self-hosted server", () => {
     await pb.refreshCsrf();
     expect((await pb.post("/api/community/mfa/totp/verify", { code: await totpNow(admin.secret, 1) })).status).toBe(200);
     const listing = phone.listing();
+    // v6 push: from here nothing makes the bridge read the account but the server's hints on its
+    // relay connection; the phone follows with the long poll (`?wait=<sig>`), as the phone app does.
+    // A plugin from before push reads on its timer: the test makes it read instead.
+    const push = typeof (await load("lib/plus/account-phones.js")).HINT_GAP_MS === "number";
+    const read = () => (push ? Promise.resolve() : bridge.plus.accountPhones.sync());
+    await sleep(1500); // the connection's own catch-up read is over
+    const t0 = Date.now();
     expect((await pb.post("/api/phones", { id: listing.id, name: listing.name, pub: listing.pub, att: listing.att, cdj: listing.cdj })).status).toBe(200);
 
     // The computer asks the person, with a round of the code exchange; the phone answers it.
-    await bridge.plus.accountPhones.sync();
-    const req1 = await until(async () => ((await pb.get(`/api/phones/${phone.id}/grants`)).data.requests as Any[])?.find((r: Any) => r.commit));
+    let sig: string | null = null;
+    const next = async (want: (r: Any) => unknown) => {
+      for (let i = 0; i < 10; i++) {
+        const v = await pb.get(`/api/phones/${phone.id}/grants${sig ? `?wait=${sig}` : ""}`);
+        sig = String(v.data.sig);
+        const hit = (v.data.requests as Any[])?.find(want);
+        if (hit) return hit;
+      }
+      throw new Error("timed out");
+    };
+    await read();
+    const req1 = await next((r: Any) => r.commit);
     const pnonce = phone.sasAnswer({ commit: req1.commit, cpub: req1.cpub });
     expect((await pb.post(`/api/phones/${phone.id}/sas`, { device: req1.device.id, commit: req1.commit, pnonce })).status).toBe(200);
-    await bridge.plus.accountPhones.sync();
-    const req2 = await until(async () => ((await pb.get(`/api/phones/${phone.id}/grants`)).data.requests as Any[])?.find((r: Any) => r.nonce));
+    await read();
+    const req2 = await next((r: Any) => r.nonce);
     const code = phone.sasCode({ commit: req2.commit, nonce: req2.nonce });
+    const ms = Date.now() - t0;
+    if (push) {
+      console.log(`push (real plugin bridge + self-hosted server, loopback): phone join -> code in ${ms} ms`);
+      expect(ms).toBeLessThan(5000);
+    }
 
     // The person types the code the phone shows, on the computer; the computer seals the grant.
     // (`notifyBridge`: what the CLI tells the running bridge over its local API.)

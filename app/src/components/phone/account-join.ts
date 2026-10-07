@@ -23,7 +23,8 @@ export type RequestRow = {
   cpub?: string | null;
   nonce?: string | null;
 };
-export type GrantsResult = { grants: GrantRow[]; requests: RequestRow[] };
+/** `sig`: a digest of both, for the long poll (`fetchGrants`'s `wait`). */
+export type GrantsResult = { grants: GrantRow[]; requests: RequestRow[]; sig?: string };
 
 /** The account's phones (and the account id), or the HTTP status that refused them. */
 export async function fetchAccountPhones(): Promise<AccountPhones | number> {
@@ -37,12 +38,18 @@ export async function fetchAccountPhones(): Promise<AccountPhones | number> {
   }
 }
 
-export async function fetchGrants(phone: string): Promise<GrantsResult | number> {
+/**
+ * The grants and requests for this phone. `wait`: the sig last seen; the server answers once they
+ * changed (a computer took its next step) or after about 20 s (a long poll).
+ */
+export async function fetchGrants(phone: string, wait: string | null = null, signal?: AbortSignal): Promise<GrantsResult | number> {
   try {
-    const res = await fetch(`/api/phones/${phone}/grants`, { headers: { Accept: "application/json" } });
+    const q = wait && /^[0-9a-f]{32}$/.test(wait) ? `?wait=${wait}` : "";
+    const res = await fetch(`/api/phones/${phone}/grants${q}`, { headers: { Accept: "application/json" }, signal });
     if (!res.ok) return res.status;
-    const d = (await res.json()) as { grants?: GrantRow[]; requests?: RequestRow[] };
-    return Array.isArray(d.grants) ? { grants: d.grants, requests: Array.isArray(d.requests) ? d.requests : [] } : 500;
+    const d = (await res.json()) as { grants?: GrantRow[]; requests?: RequestRow[]; sig?: unknown };
+    const sig = typeof d.sig === "string" && /^[0-9a-f]{32}$/.test(d.sig) ? d.sig : undefined;
+    return Array.isArray(d.grants) ? { grants: d.grants, requests: Array.isArray(d.requests) ? d.requests : [], ...(sig ? { sig } : {}) } : 500;
   } catch {
     return 0;
   }

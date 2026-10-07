@@ -56,7 +56,7 @@ import {
   startDeviceAuthorization,
   DEVICES_MAX,
 } from "./devices";
-import { answerSas, askAgain, deleteGrant, grantsFor, listPhones, phoneModel, phonesForDevice, putGrant, putRequest, registerPhone, requestsFor, revokePhone } from "./phones";
+import { answerSas, askAgain, deleteGrant, listPhones, nudgeComputersLater, phoneModel, phonesForDevice, putGrant, putRequest, registerPhone, revokePhone, waitForGrants } from "./phones";
 
 type Handler = (scope: RequestScope, request: Request, params: string[]) => Promise<Response>;
 type Route = { method: string; path: RegExp; handler: Handler };
@@ -417,6 +417,8 @@ const ROUTES: Route[] = [
     const out = await registerPhone(scope, r.session.user.id, r.data, Date.now(), { model: phoneModel(request.headers.get("user-agent") ?? ""), place: null });
     if (!out.ok) return error(out.error, out.error === "invalid_request" ? 400 : 409);
     await notify(scope, r.session, "phone_added");
+    // The account's computers hear of it at once through their relay rooms (protocol v6 push).
+    nudgeComputersLater(scope, r.session.user.id);
     return json({ ok: true, phone: { id: out.phone.id, name: out.phone.name, created_at: out.phone.created_at } });
   }),
   route("POST", "/api/phones/revoke", async (scope, request) => {
@@ -426,6 +428,7 @@ const ROUTES: Route[] = [
     const gone = await revokePhone(scope, r.session.user.id, r.data.id);
     if (!gone) return error("not_found", 404);
     await notify(scope, r.session, "phone_revoked");
+    nudgeComputersLater(scope, r.session.user.id);
     return json({ ok: true });
   }),
   route("GET", `/api/phones/${ID}/grants`, async (scope, request, [id]) => {
@@ -435,15 +438,17 @@ const ROUTES: Route[] = [
     const blocked = mfaBlock(r.session, "session");
     if (blocked) return blocked;
     if (accountActionLimited(r.session.user.id, "sessions")) return tooMany();
-    const grants = await grantsFor(scope, r.session.user.id, id);
-    if (!grants) return error("not_found", 404);
-    return json({ grants, requests: await requestsFor(scope, r.session.user.id, id) });
+    // `?wait=<sig>`: a long poll, answered once the grants or requests change (at most 20 s).
+    const out = await waitForGrants(scope, r.session.user.id, id, { since: new URL(request.url).searchParams.get("wait"), signal: request.signal });
+    if (!out) return error("not_found", 404);
+    return json(out);
   }),
   route("POST", `/api/phones/${ID}/again`, async (scope, request, [id]) => {
     const r = await memberRequest(scope, request, S.emptySchema, { mfa: "session" });
     if (!r.ok) return r.response;
     if (accountActionLimited(r.session.user.id, "sessions")) return tooMany();
     if (!(await askAgain(scope, r.session.user.id, id))) return error("not_found", 404);
+    nudgeComputersLater(scope, r.session.user.id);
     return json({ ok: true });
   }),
   route("POST", `/api/phones/${ID}/sas`, async (scope, request, [id]) => {
@@ -452,6 +457,8 @@ const ROUTES: Route[] = [
     if (accountActionLimited(r.session.user.id, "sessions")) return tooMany();
     const out = await answerSas(scope, r.session.user.id, id, r.data);
     if (!out.ok) return error(out.error, out.status);
+    // The same answer again (the phone repeats it until the nonce is out) tells nobody again.
+    if (out.fresh) nudgeComputersLater(scope, r.session.user.id);
     return json({ ok: true });
   }),
 ];

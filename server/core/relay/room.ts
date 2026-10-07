@@ -147,6 +147,10 @@ export const PUSH_BUDGET_OBJECT = "push-budget";
 const BUDGET_PATH = "/__push-budget";
 /** Internal Miblo+ plan call (the router only forwards 22-character room paths, never this). */
 export const PLUS_PATH = "/__plus";
+/** Internal "the account's phones changed" call (likewise only reachable through the namespace). */
+export const PHONES_PATH = "/__phones";
+/** What the writer gets for it: fixed, with nothing in it (the computer then asks the account). */
+export const PHONES_CHANGED = '{"t":"phones_changed"}';
 const enc = new TextEncoder();
 /** The router's network keys: "4:<key>" (IPv4) or "64:<key>,56:<key>,48:<key>" (IPv6). */
 const NET_KEYS_RE = /^(4|64|56|48):[A-Za-z0-9_-]{22}(,(64|56|48):[A-Za-z0-9_-]{22}){0,2}$/;
@@ -220,6 +224,7 @@ export class RelayRoom {
     const url = new URL(request.url);
     if (url.pathname === BUDGET_PATH) return this.budgetRequest(url, request);
     if (url.pathname === PLUS_PATH) return this.plusRequest(request);
+    if (url.pathname === PHONES_PATH) return this.phonesChanged(request);
     const room = url.pathname.slice(1);
     if (!isRoom(room)) return new Response("bad room", { status: 404 });
     if (request.method === "DELETE") return this.wipeRequest(request, room);
@@ -600,6 +605,28 @@ export class RelayRoom {
     if (typeof body.account === "string" && /^[A-Za-z0-9_-]{22}$/.test(body.account)) this.meta.account = body.account;
     await this.setPlan(plan, until);
     return Response.json({ plan: this.plan(), until: this.meta.planUntil ?? null });
+  }
+
+  /**
+   * v6 push: the account side says the account's phones changed (a phone joined, answered a code
+   * round, asked again or was revoked). The connected writer gets PHONES_CHANGED, a fixed frame
+   * with no data, and reads the account's phones itself (authenticated, as on its timer). Only the
+   * namespace reaches this; no reader frame can produce it (theirs go out as {"t":"up"}). Nothing
+   * is stored; with no writer connected it is dropped. -> {"writers": n told}.
+   */
+  private phonesChanged(request: Request): Response {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let n = 0;
+    for (const writer of this.sockets("writer")) {
+      if (!this.attachment(writer)?.authed) continue;
+      try {
+        writer.send(PHONES_CHANGED);
+        n += 1;
+      } catch {
+        // Closing.
+      }
+    }
+    return Response.json({ writers: n });
   }
 
   /**

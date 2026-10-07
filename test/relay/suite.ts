@@ -151,6 +151,38 @@ describe("relay router", () => {
   });
 });
 
+describe("relay room: phones changed (v6 push)", () => {
+  const hint = (room: string, method = "POST") => h.dispatchFetch(`http://localhost/__test/${room}/phones`, { method });
+  it("the account side's call reaches the authenticated writer only, as a fixed frame with nothing in it, and stores nothing", async () => {
+    const p = pairing();
+    const writer = await openWriter(p);
+    const reader = await openReader(p);
+    const pending = (await connect(p.room, "writer")).client!; // not authenticated yet
+    await settle(60);
+    const before = await storage(p.room);
+    const res = await hint(p.room);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ writers: 1 });
+    await settle(60);
+    expect(writer.messages).toEqual([{ t: "phones_changed" }]);
+    expect(reader.messages).toEqual([]);
+    expect(pending.messages).toEqual([]);
+    expect((await storage(p.room)).entries).toEqual(before.entries);
+    // Only a POST; a room with nobody connected drops it.
+    expect((await hint(p.room, "GET")).status).toBe(405);
+    expect(await (await hint(pairing().room)).json()).toEqual({ writers: 0 });
+    for (const c of [writer, reader, pending]) c.ws.close();
+  });
+
+  it("is never reachable from outside: the router forwards room paths only", async () => {
+    for (const path of ["/api/relay/__phones", "/api/relay/__phones?role=writer", `/api/relay/${pairing().room}/__phones`]) {
+      const res = await h.dispatchFetch(`http://localhost${path}`, { method: "POST" });
+      expect(res.status).not.toBe(200);
+    }
+    expect((await h.dispatchFetch(`http://localhost/api/relay/${pairing().room}`, { method: "POST" })).status).toBe(405);
+  });
+});
+
 describe("relay room: authentication (v2)", () => {
   it("verifies the writer by deriving the room from its token (message and header auth)", async () => {
     const p = pairing();

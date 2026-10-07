@@ -38,6 +38,7 @@ import {
   sendSasAnswers,
   syncGrants,
   waitingFor,
+  type GrantsResult,
   type RequestRow,
   type ShownCode,
 } from "./account-join";
@@ -111,9 +112,14 @@ const DONE_LINGER_MS = 8_000;
 /** An open conversation asks the computer again this often (it sends that session only while asked). */
 const REOPEN_MS = 2 * 60 * 1000;
 /** Grants are read again this often while no computer accepted this phone yet, and this often after. */
-// While no computer let this phone in yet: often, so "waiting for your confirmation" turns into
-// the pairing a few seconds after the person taps Permitir on the computer.
-const GRANTS_WAITING_MS = 5_000;
+// While no computer let this phone in yet (or one is asking the person): a long poll follows each
+// computer's next step within about a second (fetchGrants `wait`); this timer is only its fallback.
+const GRANTS_WAITING_MS = 15_000;
+/** The long poll after a failed answer (429: the account's request budget is spent for the minute). */
+const LONG_POLL_RETRY_MS = 5_000;
+const LONG_POLL_LIMITED_MS = 30_000;
+/** A long poll's answer is used by the pass it starts while this fresh (one request instead of two). */
+const PREFETCH_FRESH_MS = 2_000;
 const GRANTS_EVERY_MS = 2 * 60 * 1000;
 /** A task's answer waits this long for the computer. */
 const TASK_ANSWER_MS = 20_000;
@@ -233,6 +239,9 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   /** Pairings from QR codes were deleted on this load (v5 -> v6). */
   const [legacy, setLegacy] = useState(false);
   const [joinTick, setJoinTick] = useState(0);
+  // The grants' sig last seen, and a long poll's answer for the pass it starts.
+  const grantsSig = useRef<string | null>(null);
+  const prefetched = useRef<{ got: GrantsResult; at: number } | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   /** The codes this phone shows for computers waiting for the person (protocol v6 "Verifying a new phone"). */
   const [codes, setCodes] = useState<ShownCode[]>([]);
@@ -334,8 +343,11 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       let me: AccountIdentity = loaded;
       const meNow = me;
       setJoin((cur) => ({ k: "ready", uid: acct.uid, email: st.email ?? "", csrf: st.csrf ?? "", me: meNow, requests: cur.k === "ready" && cur.me.id === meNow.id ? cur.requests : [] }));
-      const got = await fetchGrants(me.id);
+      const pre = prefetched.current;
+      prefetched.current = null;
+      const got = pre && Date.now() - pre.at < PREFETCH_FRESH_MS ? pre.got : await fetchGrants(me.id);
       if (!alive || typeof got === "number") return;
+      if (got.sig) grantsSig.current = got.sig;
       // The code exchange: answer new commitments, show the codes of revealed ones.
       const step = await sasStep(me, me.rounds ?? [], got.requests);
       if (JSON.stringify(step.rounds) !== JSON.stringify(me.rounds ?? [])) {
@@ -365,6 +377,36 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     };
   }, [joinTick, say, t]);
   const hasPairings = !!pairings?.length;
+  // Waiting for a computer's next step (no computer let this phone in yet, or one is asking the
+  // person): a long poll, so its commitment, its nonce (the code) and its grant show at once.
+  const waitingId = join.k === "ready" && (!hasPairings || join.requests.some((r) => r.state === "pending")) ? join.me.id : null;
+  useEffect(() => {
+    if (!waitingId) return;
+    let alive = true;
+    const ac = new AbortController();
+    const pause = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+    (async () => {
+      while (alive) {
+        const got = await fetchGrants(waitingId, grantsSig.current, ac.signal);
+        if (!alive) return;
+        if (typeof got === "number") {
+          await pause(got === 429 ? LONG_POLL_LIMITED_MS : LONG_POLL_RETRY_MS);
+          continue;
+        }
+        // A server without the long poll: the timer below reads the grants.
+        if (!got.sig) return;
+        if (got.sig !== grantsSig.current) {
+          grantsSig.current = got.sig;
+          prefetched.current = { got, at: Date.now() };
+          setJoinTick((n) => n + 1);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+      ac.abort();
+    };
+  }, [waitingId]);
   useEffect(() => {
     const again = () => setJoinTick((n) => n + 1);
     window.addEventListener("focus", again);

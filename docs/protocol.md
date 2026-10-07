@@ -219,6 +219,8 @@ key any more (it encrypts the status only); they are sealed per phone ("v5: seal
 - Presence: the relay sends the writer `{"t":"presence","readers":n,"phones":[ids]}` (plaintext
   metadata it already has; `phones`, v5: the enrolled phones among them) when it connects and
   whenever the connected phones change.
+- v6 push: the relay sends the writer `{"t":"phones_changed"}` when the account side tells the room
+  that the account's phones changed ("Push: phones changed" under v6).
 - v5: a Miblo+ frame from the writer is forwarded only to the enrolled phones its `to` names, each
   with its own wrap (`{"t":"msg","ch","iv","ct","k"}`); a frame with `g: 1` (an answer to an
   enrollment) only to guests; any other Miblo+ frame is dropped. An `up` frame from an enrolled
@@ -480,7 +482,9 @@ gadget code is never asked to add a phone.
    on your Miblo account" with the phone's name and a link to revoke it, and lists it in the
    account page ("Celulares", revoke button).
 3. **The person allows it on the computer.** While the phone companion is on, the bridge reads the
-   account's phones every 30 s (`GET /api/plus/phones`, Bearer `mpt_…`: `{phones:[{id, name, pub,
+   account's phones as soon as the server says they changed (below, "Push: phones changed"), every
+   3 s while one of its requests waits for the phone, and otherwise every 10 minutes
+   (`GET /api/plus/phones`, Bearer `mpt_…`: `{phones:[{id, name, pub,
    att, cdj, model, place, created_at, asked_at}], revoked:[{id, revoked_at}]}`; `model`: browser
    and system from the registering request's User-Agent, `place`: its city and country, both
    approximate and only shown to the person). A phone it does not know yet gets **nothing**: its
@@ -514,7 +518,8 @@ gadget code is never asked to add a phone.
      whose request expired before that asks the person again for another 15 minutes.
    Each state goes to the account (`state`: `pending` | `denied` | `expired`); the phone reads
    them with its grants (`GET /api/phones/<id>/grants` -> `{grants, requests: [{device:{id, name},
-   state, expires_at, at}]}`), every 5 s while no computer let it in. A grant replaces the
+   state, expires_at, at}], sig}`), waiting on it (`?wait=<sig>`, below) while no computer let it
+   in or one asks the person. A grant replaces the
    computer's request. If the account later lists an admitted phone with a different `pub`, the
    computer revokes it (as `miblo phone revoke`); grants are always sealed to the `pub` the person
    allowed, never to what the account shows now. Phones migrating from v5 (below) come back
@@ -541,15 +546,15 @@ gadget code is never asked to add a phone.
    - `ct` = AES-256-GCM(`k`, `iv`, payload, AAD UTF-8 `"v6|grant|" + phone + "|" + room + "|" +
      epoch`), payload `{v:6, kind:"grant", room, readToken, key, macKey, epoch, name, at}`.
    The phone reads its grants with `GET /api/phones/<id>/grants` (session, second factor in the
-   last 12 hours) every time the app opens, every 5 s while it waits for one and every 2 minutes
-   after, opens only those signed by a computer it confirmed (below), checks the room and the
+   last 12 hours) every time the app opens, with a long poll while it waits for one (below, "Push:
+   phones changed"; every 15 s as a fallback) and every 2 minutes after, opens only those signed by a computer it confirmed (below), checks the room and the
    generation (never older than the one it holds) and keeps the computer as a pairing (as v5,
    with its phone identity), bound to the signed-in account and to that computer's key (a room
    another computer key holds is never taken over). The server stores only ciphertext: it never
    sees a room key, a read token or a MAC key, and it cannot make a grant the phone accepts.
 5. **Revoking.** From the account page or the phone app (`POST /api/phones/revoke {id}`, session,
    CSRF, second factor): the account marks the phone revoked, deletes its grants and emails it;
-   each computer sees it in its next read and revokes the phone locally exactly as `miblo phone
+   each computer sees it in its next read (at once: the change pushes it) and revokes the phone locally exactly as `miblo phone
    revoke` does (relay drops it with 4411, its requests go back to the computer, the read token
    and status key are replaced, `epoch` + 1, and the other phones get new grants). A phone that
    disappears from the account's list (account deleted) is revoked the same way. `miblo phone
@@ -562,8 +567,44 @@ gadget code is never asked to add a phone.
    para continuar"; it joins again as above as soon as the computer is linked, and the person
    allows it on the computer like any new phone.
 
-The relay is unchanged: phones authenticate with their own reader tokens, the status uses the
-pairing key (now only ever inside grants), Miblo+ frames are sealed per phone.
+The relay only adds the content-free `phones_changed` hint (below): phones authenticate with their
+own reader tokens, the status uses the pairing key (now only ever inside grants), Miblo+ frames
+are sealed per phone.
+
+#### Push: phones changed
+
+So that a new phone shows its code within a few seconds (and a revocation reaches the computers
+at once) without every linked computer reading the account all the time:
+
+- **Server to computers.** When a phone joins (`POST /api/phones`), answers a commitment with a
+  new nonce (`POST /api/phones/<id>/sas`; the same answer repeated tells nobody again), asks again
+  (`POST /api/phones/<id>/again`) or is revoked (`POST /api/phones/revoke`), the account side, after
+  answering the phone, calls each relay room registered by a linked (not unlinked) computer of
+  that account: `POST /__phones` on the room, reachable only through the rooms' namespace (the
+  router forwards 22-character room paths only). The room sends its authenticated writer the fixed
+  frame `{"t":"phones_changed"}` and stores nothing; with no writer connected it is dropped. A
+  room that cannot be reached never fails the phone's request.
+- **The hint carries nothing.** No phone id, no state, no data: the computer treats it only as
+  "read the account now" and runs its usual authenticated `GET /api/plus/phones` (Bearer), with
+  every check above. Only the relay writes to the writer's socket (a phone's frames always arrive
+  wrapped as `{"t":"up"}`), over the connection the computer opened to the server it trusts; a
+  forged or hostile hint can at most make the computer read sooner, which the bridge bounds: hints
+  close together make one read (200 ms), reads a hint starts are at least 1 s apart and at most 20
+  in 10 minutes (more are ignored; the timers still run). A new relay connection counts as a hint
+  (one may have been missed while it was down).
+- **The computer's timers.** Every 3 s while a request waits for the phone (its nonce has not
+  come, or the account has not taken the request's state), otherwise every 10 minutes: a fallback
+  for a missed hint and for a server without push (a self-hosted server older than this one: a new
+  phone then waits up to 10 minutes for the computer, so update the server with the plugin). A
+  bridge without push ignores the frame (an unknown `t`) and keeps reading on its own timer.
+- **The phone's long poll.** `GET /api/phones/<id>/grants` answers with `sig` (a digest of its
+  grants and requests); `?wait=<sig>` holds the answer until they differ (the server looks every
+  500 ms) or 20 s passed, so the phone sees a computer's commitment, nonce and grant about half a
+  second after it was stored, with one request (and one count against the account's rate limit)
+  per change or per 20 s. A `wait` that is not a sig is answered at once.
+- **Measured** (`test/api.test.ts`, this server on Node with a real relay socket and a computer
+  that answers each hint at once): from the phone tapping "join" to its code, about 1 s; with the
+  plugin's own reaction and 100 ms round trips (its `test/phone-push.test.js`), about 2.1 s.
 
 #### Verifying a new phone (the code) and signed grants
 

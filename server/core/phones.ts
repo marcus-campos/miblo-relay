@@ -252,9 +252,9 @@ export async function putRequest(scope: RequestScope, device: LinkedDevice, phon
   return { ok: true };
 }
 
-export type SasResult = { ok: true } | { ok: false; error: "not_found" | "already_answered"; status: number };
+export type SasResult = { ok: true; fresh: boolean } | { ok: false; error: "not_found" | "already_answered"; status: number };
 
-/** The phone answers one computer's commitment with its own nonce: once per round. */
+/** The phone answers one computer's commitment with its own nonce: once per round (`fresh`: stored now). */
 export async function answerSas(scope: RequestScope, userId: string, phoneId: string, a: { device: string; commit: string; pnonce: string }): Promise<SasResult> {
   if (!PHONE_ID_RE.test(phoneId)) return { ok: false, error: "not_found", status: 404 };
   const row = await scope.env.DB.prepare(
@@ -265,11 +265,95 @@ export async function answerSas(scope: RequestScope, userId: string, phoneId: st
     .bind(phoneId, a.device, a.commit, userId, userId)
     .first<{ pnonce: string | null }>();
   if (!row) return { ok: false, error: "not_found", status: 404 };
-  if (row.pnonce !== null) return row.pnonce === a.pnonce ? { ok: true } : { ok: false, error: "already_answered", status: 409 };
+  if (row.pnonce !== null) return row.pnonce === a.pnonce ? { ok: true, fresh: false } : { ok: false, error: "already_answered", status: 409 };
   const r = await scope.env.DB.prepare(`UPDATE phone_requests SET pnonce = ? WHERE phone_id = ? AND device_id = ? AND commit_h = ? AND pnonce IS NULL`)
     .bind(a.pnonce, phoneId, a.device, a.commit)
     .run();
-  return r.meta.changes > 0 ? { ok: true } : { ok: false, error: "already_answered", status: 409 };
+  return r.meta.changes > 0 ? { ok: true, fresh: true } : { ok: false, error: "already_answered", status: 409 };
+}
+
+// --- push: the computers hear at once that the account's phones changed ----------------------
+
+/** A relay room's internal "phones changed" call (only reachable through the RELAY binding). */
+export const PHONES_HINT_PATH = "/__phones";
+/** At most this many rooms are told per change (an account has a few computers). */
+const HINT_ROOMS_MAX = 32;
+
+/**
+ * Tells each linked computer of the account, through the relay room it is connected to, that the
+ * account's phones changed (a phone joined, answered a code round, asked again or was revoked).
+ * The room sends its writer a fixed {"t":"phones_changed"} with nothing in it; the computer then
+ * reads GET /api/plus/phones as it always does. Best effort: a computer that misses it (offline,
+ * or a bridge without push) reads on its own timer. Never throws. -> the rooms told.
+ */
+export async function nudgeComputers(scope: RequestScope, userId: string): Promise<number> {
+  const ns = scope.env.RELAY;
+  if (!ns) return 0;
+  try {
+    const rows = await scope.env.DB.prepare(
+      `SELECT DISTINCT r.room FROM plus_rooms r JOIN plus_devices d ON d.id = r.device_id
+        WHERE r.user_id = ? AND d.user_id = ? AND d.revoked_at IS NULL LIMIT ?`,
+    )
+      .bind(userId, userId, HINT_ROOMS_MAX)
+      .all<{ room: string }>();
+    let told = 0;
+    await Promise.all(
+      rows.results.map(async ({ room }) => {
+        try {
+          const res = await ns.get(ns.idFromName(room)).fetch(`https://relay.internal${PHONES_HINT_PATH}`, { method: "POST" });
+          if (res.ok) told += 1;
+        } catch {
+          // That room's relay is unreachable: its computer reads on its timer.
+        }
+      }),
+    );
+    return told;
+  } catch {
+    return 0;
+  }
+}
+
+/** nudgeComputers after the response (the phone never waits for the relay). */
+export function nudgeComputersLater(scope: RequestScope, userId: string): void {
+  scope.waitUntil(nudgeComputers(scope, userId));
+}
+
+/** How long GET /api/phones/<id>/grants?wait= holds the answer at most, and how often it looks. */
+export const GRANTS_WAIT_MS = 20_000;
+export const GRANTS_CHECK_MS = 500;
+export const SIG_RE = /^[0-9a-f]{32}$/;
+
+async function sigOf(v: unknown): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(v))));
+  return Array.from(d.subarray(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * One phone's grants and requests (as grantsFor and requestsFor give them) and `sig`, a digest of
+ * both. With `since` (the sig the phone last saw), the answer waits until they change or `waitMs`
+ * passed (a long poll: the phone sees a computer's next step within about GRANTS_CHECK_MS, with
+ * one request instead of one a second). -> null when the phone is not the account's.
+ */
+export async function waitForGrants(
+  scope: RequestScope,
+  userId: string,
+  phoneId: string,
+  { since = null, signal, waitMs = GRANTS_WAIT_MS, checkMs = GRANTS_CHECK_MS }: { since?: string | null; signal?: AbortSignal; waitMs?: number; checkMs?: number } = {},
+) {
+  const read = async () => {
+    const grants = await grantsFor(scope, userId, phoneId);
+    if (!grants) return null;
+    const requests = await requestsFor(scope, userId, phoneId);
+    return { grants, requests, sig: await sigOf({ grants, requests }) };
+  };
+  let v = await read();
+  if (!since || !SIG_RE.test(since)) return v;
+  const end = Date.now() + Math.min(waitMs, GRANTS_WAIT_MS);
+  while (v && v.sig === since && Date.now() + checkMs <= end && !signal?.aborted) {
+    await new Promise((r) => setTimeout(r, checkMs));
+    v = await read();
+  }
+  return v;
 }
 
 export async function deleteGrant(scope: RequestScope, device: LinkedDevice, phoneId: string): Promise<boolean> {
