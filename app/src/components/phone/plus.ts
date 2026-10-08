@@ -623,7 +623,9 @@ export async function parseConfirm(payload: unknown, now: number): Promise<Confi
   let what: ConfirmWhat | null = null;
   if (w?.kind === "settings" && Array.isArray(w.on) && Array.isArray(w.folders)) {
     const on = w.on.filter((x): x is string => typeof x === "string" && ON_IDS.has(x));
-    const folders = w.folders.filter((x): x is string => typeof x === "string").map((x) => cleanDisplay(x, 240));
+    // A folder is shown exactly as the computer sent it (the hash covers those bytes), so one with
+    // hidden or direction-changing characters is refused rather than shown as something else.
+    const folders = w.folders.filter((x): x is string => typeof x === "string" && x.length <= 1024 && cleanDisplay(x, 1024) === x);
     if (on.length !== w.on.length || folders.length !== w.folders.length || folders.length > 12) return null;
     const int = (v: unknown) => (v === null ? null : typeof v === "number" && Number.isSafeInteger(v) && v > 0 && v < 10_000 ? v : undefined);
     const timeoutS = int(w.timeoutS);
@@ -632,8 +634,10 @@ export async function parseConfirm(payload: unknown, now: number): Promise<Confi
     what = { kind: "settings", on, timeoutS, taskMaxMin, folders: w.folders as string[] };
   } else if (w?.kind === "admit") {
     const ph = obj(w.phone);
-    if (!ph || typeof ph.id !== "string" || !PHONE_RE.test(ph.id) || typeof ph.name !== "string") return null;
-    const opt = (v: unknown) => (v === null ? null : typeof v === "string" ? v : undefined);
+    // Shown as sent (the hash covers it): plain and short, or refused.
+    const plain = (v: string) => v.length <= 120 && cleanDisplay(v, 120) === v;
+    if (!ph || typeof ph.id !== "string" || !PHONE_RE.test(ph.id) || typeof ph.name !== "string" || !plain(ph.name)) return null;
+    const opt = (v: unknown) => (v === null ? null : typeof v === "string" && plain(v) ? v : undefined);
     const model = opt(ph.model);
     const place = opt(ph.place);
     if (model === undefined || place === undefined) return null;
