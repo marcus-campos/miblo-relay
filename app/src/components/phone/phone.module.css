@@ -2115,3 +2115,70 @@ div.toolCard {
 .taskRow[data-state="done"] .dot {
   background: var(--blue);
 }
+
+/* "Meu Miblo": the Miblo's screen, live (LiveMiblo.tsx): the firmware's own 240 x 240 frame, each
+   of its pixels a whole number of the display's, never smoothed. 1.25: a program's App screen
+   with its name, and "fundo no Miblo" when its background is a frame kept on the gadget. */
+.live {
+  margin: 1rem 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.liveBezel {
+  background: var(--bezel);
+  border-radius: 22px;
+  padding: 12px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  line-height: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.liveScreen {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  background: #000;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.liveCaption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  color: var(--ink-2);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.liveApp,
+.liveBg {
+  display: inline-block;
+  padding: 0.0625rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveApp {
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.liveBg {
+  background: var(--surface-2, rgb(127 127 127 / 0.12));
+  color: var(--ink-2);
+}

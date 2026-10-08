@@ -3,6 +3,7 @@
 import type { PhoneStrings } from "./strings";
 import { decodeLookCode } from "@/lib/look-code";
 import type { Look } from "@/lib/miblo-look";
+import { screenAppOf, type ScreenApp } from "@/lib/screen-card";
 
 export type SessionView = {
   id: string;
@@ -30,6 +31,8 @@ export type MibloView = {
   online: boolean;
   /** Its look (pet, colours, accessories); null when unknown. With My pet, the preset, eyes, items and colours (its pet byte means nothing). */
   look: Look | null;
+  /** Its look code as sent (MIBLO1:...), for the live screen's module; null when it is not one. */
+  code: string | null;
   /** Runs My pet from Miblo Studio, drawn from its own file (`pet`), which comes apart (pet-cache.ts). */
   myPet: boolean;
   /** My pet's file by name: the SHA-256 of it, base64url; null when the computer could not read it. */
@@ -53,6 +56,7 @@ function parseMiblos(v: unknown): MibloView[] {
         label,
         online: m.online === true,
         look: decoded?.ok ? decoded.look : null,
+        code: decoded?.ok ? (m.look as string) : null,
         myPet: m.myPet === true,
         pet: m.myPet === true && typeof m.pet === "string" && /^[A-Za-z0-9_-]{43}$/.test(m.pet) ? m.pet : null,
         screen: MIBLO_SCREENS.find((x) => x === m.screen) ?? null,
@@ -70,6 +74,10 @@ export type SnapshotView = {
   today: { usd: number | null; turns: number | null; work: number | null } | null;
   /** The person's own Miblos; empty from an older plugin or with none paired. */
   miblos: MibloView[];
+  /** The snapshot back in the gadget's own shape, for the live screen's module (the firmware's parser). */
+  gadget: Record<string, unknown>;
+  /** 1.25: a program's App screen (its card, the frame it is drawn over on the Miblo); null: none. */
+  app: ScreenApp | null;
 };
 
 const ORDER = { needs: 0, working: 1, done: 2, idle: 3 } as const;
@@ -134,6 +142,28 @@ function limit(v: unknown): LimitView | null {
   return { pct: Math.max(0, Math.min(100, Math.round(pct))), reset: toMs(o.reset) };
 }
 
+/**
+ * The phone's payload (plugin lib/phone-secrets.js phonePayload: the gadget snapshot's fields,
+ * renamed) back in the shape the gadget gets, for the live screen's module: `limits` is `usage`,
+ * `limitsMore` is `lims`, and the frame's time stands for `seq` and `now`.
+ */
+export function gadgetSnapshot(p: Record<string, unknown>, at: number): Record<string, unknown> {
+  const arr = (v: unknown, n: number) => (Array.isArray(v) ? v.slice(0, n) : []);
+  return {
+    v: 1,
+    seq: at,
+    now: Math.floor(at / 1000),
+    host: str(p.host, 40),
+    sessions: arr(p.sessions, 50),
+    more: Math.max(0, num(p.more) ?? 0),
+    alerts: arr(p.alerts, 20),
+    usage: p.limits && typeof p.limits === "object" ? p.limits : null,
+    ...(Array.isArray(p.limitsMore) ? { lims: p.limitsMore.slice(0, 6) } : {}),
+    today: p.today && typeof p.today === "object" ? p.today : null,
+    ...(p.screen && typeof p.screen === "object" ? { screen: p.screen } : {}),
+  };
+}
+
 export function parseSnapshot(payload: unknown, t: PhoneStrings): SnapshotView | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
@@ -155,8 +185,9 @@ export function parseSnapshot(payload: unknown, t: PhoneStrings): SnapshotView |
     .sort((a, b) => ORDER[a.kind] - ORDER[b.kind]);
   const limits = (p.limits ?? p.usage) as Record<string, unknown> | undefined;
   const today = p.today && typeof p.today === "object" ? (p.today as Record<string, unknown>) : null;
+  const at = toMs(p.at) ?? toMs(p.now) ?? Date.now();
   return {
-    at: toMs(p.at) ?? toMs(p.now) ?? Date.now(),
+    at,
     host: str(p.host, 40),
     sessions,
     more: Math.max(0, num(p.more) ?? 0),
@@ -164,6 +195,8 @@ export function parseSnapshot(payload: unknown, t: PhoneStrings): SnapshotView |
     d7: limit(limits?.d7),
     today: today ? { usd: num(today.usd), turns: num(today.turns), work: num(today.work) } : null,
     miblos: parseMiblos(p.miblos),
+    gadget: gadgetSnapshot(p, at),
+    app: screenAppOf(p),
   };
 }
 

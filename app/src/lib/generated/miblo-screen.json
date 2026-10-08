@@ -1,0 +1,5 @@
+{
+  "firmware": "1.23.2",
+  "sha256": "1ffed0e8bce2db49f3d119610d0f12be72bd9a073140d4c4ff9c7dfe3298687f",
+  "emcc": "6.0.10"
+}
