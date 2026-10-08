@@ -9,6 +9,7 @@ pelo celular (histórico, respostas, aprovações, tarefas remotas) funciona aqu
 licença**, para quem subir o próprio servidor.
 
 - [Como funciona a privacidade](#privacidade)
+- [Baixar e conferir](#baixar-e-conferir)
 - [Subir em 3 passos (Docker)](#subir-em-3-passos-docker)
 - [Na sua própria conta Cloudflare](#na-sua-própria-conta-cloudflare)
 - [Apontar o seu computador para ele](#apontar-o-seu-computador-para-ele)
@@ -31,24 +32,48 @@ servido por você. Isso tira a confiança no JavaScript servido pelo miblo.ai. D
 Enquanto o seu servidor estiver configurado, o plugin não manda nada do celular nem da conta para o
 miblo.ai (ele só continua lendo do miblo.ai o manifesto assinado de atualizações).
 
+## Baixar e conferir
+
+O código é distribuído só pelo miblo.ai, em `https://miblo.ai/dl/relay/`, ao lado do firmware e
+dos instaladores, e assinado com a mesma chave das releases do Miblo (Ed25519). A versão mais nova
+está em `https://miblo.ai/dl/extras/latest.json`; a página
+[miblo.ai/docs/servidor-proprio](https://miblo.ai/docs/servidor-proprio) mostra este guia e o link
+dela.
+
+```sh
+V=1.0.0   # a versão mais nova: https://miblo.ai/dl/extras/latest.json
+curl -fLO https://miblo.ai/dl/relay/miblo-relay-$V.tar.gz
+curl -fLO https://miblo.ai/dl/relay/miblo-relay-$V.tar.gz.sig
+node -e 'const c=require("crypto"),fs=require("fs"),f=process.argv[1],k=c.createPublicKey({key:{kty:"OKP",crv:"Ed25519",x:Buffer.from("LGtuUvDA506N8iD1tolbQzWAJBb9hUerW0OH4C2pBek=","base64").toString("base64url")},format:"jwk"});const ok=c.verify(null,fs.readFileSync(f),k,Buffer.from(fs.readFileSync(f+".sig","utf8").trim(),"base64"));console.log(ok?"assinatura OK":"ASSINATURA INVÁLIDA: não use este arquivo");process.exit(ok?0:1)' miblo-relay-$V.tar.gz
+tar -xzf miblo-relay-$V.tar.gz && cd miblo-relay-$V
+```
+
+A chave pública (`LGtuUvDA506N8iD1tolbQzWAJBb9hUerW0OH4C2pBek=`) é a mesma que o plugin do Miblo
+usa para conferir as atualizações. `https://miblo.ai/dl/relay/SHA256SUMS` (assinado em
+`SHA256SUMS.sig`) traz o SHA-256 de cada versão publicada.
+
 ## Subir em 3 passos (Docker)
 
 Você precisa de uma máquina com Docker, um nome DNS apontando para ela e as portas 80 e 443 abertas
 (o Caddy pega o certificado TLS sozinho).
 
-1. **Baixar e configurar**
-   ```sh
-   git clone https://github.com/marcus-campos/miblo-relay.git && cd miblo-relay/deploy/docker
-   cp .env.example .env   # coloque o seu domínio em RELAY_DOMAIN
-   ```
-2. **Subir**
-   ```sh
-   docker compose up -d --build
-   docker compose logs relay   # mostra o código de configuração e a impressão digital do servidor
-   ```
-3. **Criar a sua conta**: abra `https://seu-dominio/conta`, use o código de configuração, crie a
-   senha e adicione um segundo fator (passkey recomendada, ou app autenticador). Gere os códigos de
-   recuperação.
+**1. Configurar**, dentro da pasta baixada e conferida acima:
+
+```sh
+cd deploy/docker
+cp .env.example .env   # coloque o seu domínio em RELAY_DOMAIN
+```
+
+**2. Subir**
+
+```sh
+docker compose up -d --build
+docker compose logs relay   # mostra o código de configuração e a impressão digital do servidor
+```
+
+**3. Criar a sua conta**: abra `https://seu-dominio/conta`, use o código de configuração, crie a
+senha e adicione um segundo fator (passkey recomendada, ou app autenticador). Gere os códigos de
+recuperação.
 
 Depois, no computador: [apontar o plugin para o seu servidor](#apontar-o-seu-computador-para-ele).
 Sem Docker: `npm ci && npm run build && PUBLIC_ORIGIN=https://seu-dominio node dist/server.mjs`
@@ -60,6 +85,7 @@ Roda como um Worker na **sua** conta Cloudflare (o plano gratuito basta para uma
 Durable Objects:
 
 ```sh
+# dentro da pasta baixada e conferida em "Baixar e conferir"
 npm ci
 cp deploy/cloudflare/wrangler.jsonc.example deploy/cloudflare/wrangler.jsonc
 cd deploy/cloudflare
@@ -118,14 +144,19 @@ aleatório longo, como `openssl rand -base64 24`).
 
 ## Atualizar
 
+Baixe e confira a versão nova como em [Baixar e conferir](#baixar-e-conferir), copie para ela o seu
+`deploy/docker/.env` (na Cloudflare, o seu `deploy/cloudflare/wrangler.jsonc`) e, na pasta nova:
+
 ```sh
-git pull && cd deploy/docker && docker compose up -d --build
+cd deploy/docker && docker compose up -d --build
 ```
 
-As migrações do banco rodam sozinhas ao subir (Node). Na Cloudflare:
-`npx wrangler d1 migrations apply miblo-relay --remote && npm run build:app && npx wrangler deploy`.
-Acompanhe as releases do repositório: correções de segurança vêm marcadas. Faça backup do volume
-`relay-data` (Docker) antes de atualizar.
+Os volumes do Docker (banco e segredos) continuam os mesmos: o projeto do Compose leva o nome da
+pasta (`docker`), igual nas duas versões. As migrações do banco rodam sozinhas ao subir (Node). Na Cloudflare:
+`npm ci && npx wrangler d1 migrations apply miblo-relay --remote && npm run build:app && npx wrangler deploy`.
+Acompanhe as versões em `https://miblo.ai/dl/extras/latest.json`: correções de segurança são
+avisadas na página [miblo.ai/docs/servidor-proprio](https://miblo.ai/docs/servidor-proprio). Faça
+backup do volume `relay-data` (Docker) antes de atualizar.
 
 ## Segurança
 
@@ -138,8 +169,8 @@ Acompanhe as releases do repositório: correções de segurança vêm marcadas. 
   nova dela antes de usar o servidor; se a chave mudar, nada é enviado até você aceitar a nova com
   `miblo server set` (e o código do Miblo).
 - Guarde `secrets.json` (ou os segredos do Worker) longe de backups que outros leiam.
-- Encontrou uma falha? Abra um aviso de segurança privado no GitHub (Security › Report a
-  vulnerability). Não abra issue pública.
+- Encontrou uma falha? Escreva para contato@miblo.ai (assunto "Security"), em particular. Não a
+  publique antes da correção.
 
 ## Builds reproduzíveis
 
@@ -152,7 +183,7 @@ docker compose exec relay tail -1 dist/HASHES.txt   # o que está rodando
 npm ci && npm run build && npm run hashes | tail -1  # o que este código gera
 ```
 
-Cada release publica esse hash nas notas da release; os três precisam ser iguais.
+Os dois precisam ser iguais: o que roda é o que este código, conferido pela assinatura, gera.
 
 ## Licença
 
@@ -184,24 +215,48 @@ removes the trust in the JavaScript miblo.ai serves. Details in the [threat mode
 While your server is set, the plugin sends nothing of the phone companion or the account to
 miblo.ai (it still reads its signed update manifest from miblo.ai).
 
+### Download and verify
+
+The source is distributed only from miblo.ai, at `https://miblo.ai/dl/relay/`, next to the
+firmware and the installers, and signed with the key of Miblo's releases (Ed25519). The newest
+version is in `https://miblo.ai/dl/extras/latest.json`; the page
+[miblo.ai/en/docs/self-hosting](https://miblo.ai/en/docs/self-hosting) shows this guide and links
+it.
+
+```sh
+V=1.0.0   # the newest version: https://miblo.ai/dl/extras/latest.json
+curl -fLO https://miblo.ai/dl/relay/miblo-relay-$V.tar.gz
+curl -fLO https://miblo.ai/dl/relay/miblo-relay-$V.tar.gz.sig
+node -e 'const c=require("crypto"),fs=require("fs"),f=process.argv[1],k=c.createPublicKey({key:{kty:"OKP",crv:"Ed25519",x:Buffer.from("LGtuUvDA506N8iD1tolbQzWAJBb9hUerW0OH4C2pBek=","base64").toString("base64url")},format:"jwk"});const ok=c.verify(null,fs.readFileSync(f),k,Buffer.from(fs.readFileSync(f+".sig","utf8").trim(),"base64"));console.log(ok?"signature OK":"BAD SIGNATURE: do not use this file");process.exit(ok?0:1)' miblo-relay-$V.tar.gz
+tar -xzf miblo-relay-$V.tar.gz && cd miblo-relay-$V
+```
+
+The public key (`LGtuUvDA506N8iD1tolbQzWAJBb9hUerW0OH4C2pBek=`) is the one the Miblo plugin
+checks its updates with. `https://miblo.ai/dl/relay/SHA256SUMS` (signed in `SHA256SUMS.sig`) holds
+the SHA-256 of every published version.
+
 ### Quick start (Docker, 3 steps)
 
 You need a machine with Docker, a DNS name pointing at it and ports 80 and 443 open (Caddy gets the
 TLS certificate by itself).
 
-1. **Get and configure it**
-   ```sh
-   git clone https://github.com/marcus-campos/miblo-relay.git && cd miblo-relay/deploy/docker
-   cp .env.example .env   # set RELAY_DOMAIN to your domain
-   ```
-2. **Start it**
-   ```sh
-   docker compose up -d --build
-   docker compose logs relay   # shows the setup token and the server's identity fingerprint
-   ```
-3. **Create your account**: open `https://your-domain/conta` (or `/en/account`), use the setup
-   token, set a password and add a second factor (a passkey, recommended, or an authenticator app).
-   Generate the recovery codes.
+**1. Configure it**, inside the folder you downloaded and checked above:
+
+```sh
+cd deploy/docker
+cp .env.example .env   # set RELAY_DOMAIN to your domain
+```
+
+**2. Start it**
+
+```sh
+docker compose up -d --build
+docker compose logs relay   # shows the setup token and the server's identity fingerprint
+```
+
+**3. Create your account**: open `https://your-domain/conta` (or `/en/account`), use the setup
+token, set a password and add a second factor (a passkey, recommended, or an authenticator app).
+Generate the recovery codes.
 
 Without Docker: `npm ci && npm run build && PUBLIC_ORIGIN=https://your-domain node dist/server.mjs`
 (Node 22.13+ or 23.4+, which have `node:sqlite`) behind any TLS proxy.
@@ -212,6 +267,7 @@ A Worker on **your** Cloudflare account (the free plan is enough for one person)
 Durable Objects:
 
 ```sh
+# inside the folder you downloaded and checked in "Download and verify"
 npm ci
 cp deploy/cloudflare/wrangler.jsonc.example deploy/cloudflare/wrangler.jsonc
 cd deploy/cloudflare
@@ -267,14 +323,20 @@ value, like `openssl rand -base64 24`) for the same.
 
 ### Upgrading
 
+Download and verify the new version as in [Download and verify](#download-and-verify), copy your
+`deploy/docker/.env` into it (on Cloudflare, your `deploy/cloudflare/wrangler.jsonc`) and, in the
+new folder:
+
 ```sh
-git pull && cd deploy/docker && docker compose up -d --build
+cd deploy/docker && docker compose up -d --build
 ```
 
-Database migrations run at start (Node). On Cloudflare:
-`npx wrangler d1 migrations apply miblo-relay --remote && npm run build:app && npx wrangler deploy`.
-Watch the repository's releases (security fixes are marked) and back up the `relay-data` volume
-first.
+The Docker volumes (database and secrets) stay the same: the Compose project is named after its
+folder (`docker`), the same in both versions. Database migrations run at start (Node). On Cloudflare:
+`npm ci && npx wrangler d1 migrations apply miblo-relay --remote && npm run build:app && npx wrangler deploy`.
+Watch the versions in `https://miblo.ai/dl/extras/latest.json` (security fixes are announced on
+[miblo.ai/en/docs/self-hosting](https://miblo.ai/en/docs/self-hosting)) and back up the
+`relay-data` volume first.
 
 ### Security
 
@@ -287,8 +349,8 @@ first.
   with it before using the server; if the key changes, nothing is sent until you accept the new one
   with `miblo server set` (and your Miblo's code).
 - Keep `secrets.json` (or the Worker's secrets) out of backups others can read.
-- Found a vulnerability? Open a private security advisory on GitHub (Security › Report a
-  vulnerability), not a public issue.
+- Found a vulnerability? Write to contato@miblo.ai (subject "Security"), privately, and do not
+  publish it before the fix.
 
 ### Reproducible builds
 
@@ -301,7 +363,7 @@ docker compose exec relay tail -1 dist/HASHES.txt   # what is running
 npm ci && npm run build && npm run hashes | tail -1  # what this source builds
 ```
 
-Every release publishes that hash in its notes; all three must match.
+Both must match: what runs is what this source, checked by its signature, builds.
 
 ### Development
 
