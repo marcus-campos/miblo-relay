@@ -75,7 +75,7 @@ export function clientAddress(req: http.IncomingMessage, trusted: ReturnType<typ
   return peer;
 }
 
-function toRequest(req: http.IncomingMessage, origin: URL, trustedProxy: ReturnType<typeof parseRanges>, body: Buffer | null): Request {
+function toRequest(req: http.IncomingMessage, origin: URL, trustedProxy: ReturnType<typeof parseRanges>, body: Buffer | null, signal?: AbortSignal): Request {
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue;
@@ -89,7 +89,7 @@ function toRequest(req: http.IncomingMessage, origin: URL, trustedProxy: ReturnT
   // The URL is always the configured origin's: the Host header never decides anything.
   const url = new URL(req.url ?? "/", origin);
   const method = req.method ?? "GET";
-  return new Request(url, { method, headers, body: body && method !== "GET" && method !== "HEAD" ? new Uint8Array(body) : undefined });
+  return new Request(url, { method, headers, signal, body: body && method !== "GET" && method !== "HEAD" ? new Uint8Array(body) : undefined });
 }
 
 async function readBody(req: http.IncomingMessage, max = 256 * 1024): Promise<Buffer | null> {
@@ -139,7 +139,13 @@ export async function createRelayServer(opts: ServerOptions) {
         res.end('{"error":"payload_too_large"}');
         return;
       }
-      const out = await handle(scope, toRequest(req, origin, trustedProxy, body), assets);
+      // request.signal fires when the client goes away before its answer (a phone's dropped
+      // grants long poll then stops at once instead of at its 20 s end).
+      const gone = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) gone.abort();
+      });
+      const out = await handle(scope, toRequest(req, origin, trustedProxy, body, gone.signal), assets);
       if (opts.accessLog) console.log(`${req.method} ${(req.url ?? "").split("?")[0].slice(0, 80)} ${out.status}`);
       await writeResponse(res, out, req.method === "HEAD");
     } catch {

@@ -12,6 +12,9 @@
   "name": "miblo-relay",
   "main": "../../server/worker/index.ts",
   "compatibility_date": "2026-09-01",
+  // request.signal fires when the client goes away (no default date yet), so a phone's dropped
+  // grants long poll stops with it.
+  "compatibility_flags": ["enable_request_signal"],
   "observability": { "enabled": true },
   // The phone app and the account page (npm run build:app). The Worker answers every request first
   // (security headers, the app's routes) and reads the files through the ASSETS binding.

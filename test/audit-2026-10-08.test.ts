@@ -1,7 +1,9 @@
 // Security audit 2026-10-08 (miblo-platform docs/audits/2026-10-08-web.md): relay regressions.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { LIMIT_KEYS, resetLimits } from "../server/core/http";
-import { startServer } from "./helpers/server";
+import crypto from "node:crypto";
+import http from "node:http";
+import { adminWithTotp, Browser, startServer } from "./helpers/server";
 
 let srv: Awaited<ReturnType<typeof startServer>>;
 
@@ -43,4 +45,60 @@ describe("R1: a flood of new networks cannot lock everyone out of the server", (
     }
     expect(refused).toBeGreaterThan(0);
   }, 120_000);
+});
+
+describe("RL2 (L1, L3 of miblo.ai): passkey options and the grants long poll", () => {
+  let own: Awaited<ReturnType<typeof startServer>>;
+  let browser: Browser;
+  beforeAll(async () => {
+    own = await startServer();
+    browser = (await adminWithTotp(own.base)).browser;
+  });
+  afterAll(async () => {
+    await own?.app.close();
+  });
+
+  it("passkey options read the body only after the session and origin checks", async () => {
+    const post = (headers: Record<string, string>) =>
+      fetch(`${own.base}/api/community/mfa/passkey/options`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{" + "x".repeat(200_000) });
+    // Before: 400 (the body was parsed first). Now: no session, so the body is never looked at.
+    expect((await post({ "sec-fetch-site": "same-origin" })).status).toBe(401);
+    // Signed in, cross-site: refused before reading.
+    expect((await post({ cookie: browser.cookie, "x-csrf-token": browser.csrf, "sec-fetch-site": "cross-site" })).status).toBe(403);
+    // Signed in, same-origin: the body is read with the size limit.
+    expect((await post({ cookie: browser.cookie, "x-csrf-token": browser.csrf, "sec-fetch-site": "same-origin" })).status).toBe(413);
+    // Both purposes still work.
+    expect((await browser.post("/api/community/mfa/passkey/options", { purpose: "register" })).status).toBe(200);
+    expect((await browser.post("/api/community/mfa/passkey/options", { purpose: "verify" })).status).toBe(404);
+  });
+
+  it("a long poll whose client went away stops reading at once (Node: request.signal)", async () => {
+    const ecdh = crypto.createECDH("prime256v1");
+    ecdh.generateKeys();
+    const id = crypto.randomBytes(16).toString("base64url");
+    expect((await browser.post("/api/phones", { id, name: "Pixel", pub: ecdh.getPublicKey().toString("base64url") })).status).toBe(200);
+    const sig = String((await browser.get(`/api/phones/${id}/grants`)).data.sig);
+    // Count the long poll's looks (one change-counter read each).
+    let looks = 0;
+    const prepare = own.app.db.prepare.bind(own.app.db);
+    own.app.db.prepare = ((sql: string) => {
+      if (sql.startsWith("SELECT rev FROM account_phones")) looks++;
+      return prepare(sql);
+    }) as typeof own.app.db.prepare;
+    try {
+      const req = http.request(`${own.base}/api/phones/${id}/grants?wait=${sig}`, { headers: { cookie: browser.cookie, "sec-fetch-site": "same-origin" } });
+      req.on("error", () => {});
+      req.end();
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(looks).toBeGreaterThan(0);
+      req.destroy();
+      await new Promise((r) => setTimeout(r, 700));
+      const after = looks;
+      await new Promise((r) => setTimeout(r, 2000));
+      // Before: about 4 more looks in these 2 s (until the 20 s end). Now: none.
+      expect(looks).toBe(after);
+    } finally {
+      own.app.db.prepare = prepare;
+    }
+  });
 });
