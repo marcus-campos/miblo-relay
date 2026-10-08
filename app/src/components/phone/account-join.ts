@@ -250,7 +250,7 @@ export async function grantVerdict(phone: string, pins: Pin[], rounds: SasRound[
 
 // --- v7: the computer shows the code, this phone types it ------------------------------------------
 
-/** A v7 run is kept this long for its computer's first grant (a request waits 15 minutes). */
+/** A v7 run older than this goes when this phone answers another code (a request waits 15 minutes). */
 const PAKE_KEPT_MS = 30 * 60_000;
 export type PakeSend = "ok" | "cancelled" | "error" | "gone";
 
@@ -288,7 +288,9 @@ export async function answerCode(csrf: string, me: AccountIdentity, q: RequestRo
 export async function pinByCode(me: AccountIdentity, g: GrantRow, payload: { conf?: unknown }, now = Date.now()): Promise<AccountIdentity | null> {
   if (typeof g.cpub !== "string" || typeof payload.conf !== "string") return null;
   for (const r of me.pakes ?? []) {
-    if (r.cpub !== g.cpub || now - r.at > PAKE_KEPT_MS) continue;
+    // Any age: the confirmation alone proves that computer ran this exchange with the right code
+    // (a phone that reads its grant late still pins it; the run goes once used).
+    if (r.cpub !== g.cpub) continue;
     if ((await confOf(r.isk)) !== payload.conf) continue;
     const pins = [...(me.pins ?? []).filter((p) => p.cpub !== g.cpub), { cpub: g.cpub, device: g.device.id, name: g.device.name.slice(0, 40), at: now }];
     const next = { ...me, pins, pakes: (me.pakes ?? []).filter((x) => x !== r) };

@@ -268,7 +268,8 @@ export function stopMacText(room: string, f: StopFields): string {
 
 /** A pairing a computer sealed to this phone's ECDH key (stored by the account, opened only here). */
 export type Grant = { room: string; epoch: number; epk: string; iv: string; ct: string };
-export type GrantPayload = { room: string; readToken: string; key: string; macKey: string; epoch: number; name: string; at: number };
+/** `conf` (v7): the computer's confirmation of the code exchange this phone ran with it; pinByCode (account-join.ts) pins that computer with it. */
+export type GrantPayload = { room: string; readToken: string; key: string; macKey: string; epoch: number; name: string; at: number; conf?: string };
 const KEY43 = /^[A-Za-z0-9_-]{43}$/;
 
 /**
@@ -301,6 +302,8 @@ export async function openGrant(priv: CryptoKey, phone: string, g: Grant): Promi
     epoch: g.epoch,
     name: typeof p.name === "string" ? p.name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 40) || "Miblo" : "Miblo",
     at: typeof p.at === "number" ? p.at : 0,
+    // v7: without it a phone that typed the right code never pins the computer and waits for ever.
+    ...(typeof p.conf === "string" && KEY43.test(p.conf) ? { conf: p.conf } : {}),
   };
 }
 
