@@ -3,7 +3,7 @@
 import type { PhoneStrings } from "./strings";
 import { decodeLookCode } from "@/lib/look-code";
 import type { Look } from "@/lib/miblo-look";
-import { screenAppOf, type ScreenApp } from "@/lib/screen-card";
+import { cleanLine, parseCard, screenAppOf, type Card, type ScreenApp } from "@/lib/screen-card";
 
 export type SessionView = {
   id: string;
@@ -78,7 +78,53 @@ export type SnapshotView = {
   gadget: Record<string, unknown>;
   /** 1.25: a program's App screen (its card, the frame it is drawn over on the Miblo); null: none. */
   app: ScreenApp | null;
+  /** 1.25: the computer's Miblo Apps (read-only here: they are set up on the computer). */
+  apps: AppView[];
 };
+
+/** One of the computer's apps, as the phone shows it. */
+export type AppView = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  needsSetup: boolean;
+  /** The card it shows (sample data when it has not run yet). */
+  preview: Card | null;
+  /** Its settings, as label and value, in the phone's language. */
+  settings: { label: string; value: string }[];
+};
+
+const APP_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const labelText = (v: unknown, lang: "pt" | "en", max: number): string =>
+  typeof v === "string" ? cleanLine(v, max) : v && typeof v === "object" ? cleanLine((v as Record<string, unknown>)[lang] ?? (v as Record<string, unknown>)[lang === "pt" ? "en" : "pt"], max) : "";
+
+/** `apps` in the payload (the plugin's apps list, when it sends it); [] from an older one. */
+export function parseApps(v: unknown, lang: "pt" | "en"): AppView[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((a): a is Record<string, unknown> => !!a && typeof a === "object" && typeof (a as { id?: unknown }).id === "string" && APP_ID.test((a as { id: string }).id))
+    .slice(0, 32)
+    .map((a) => {
+      const schema = Array.isArray(a.schema) ? a.schema : Array.isArray(a.settings) ? a.settings : [];
+      const values = a.values && typeof a.values === "object" ? (a.values as Record<string, unknown>) : {};
+      const settings = schema
+        .filter((s): s is Record<string, unknown> => !!s && typeof s === "object" && typeof (s as { key?: unknown }).key === "string")
+        .slice(0, 12)
+        .map((s) => {
+          const x = values[s.key as string] ?? s.default;
+          const value = typeof x === "boolean" ? (x ? (lang === "pt" ? "sim" : "yes") : lang === "pt" ? "não" : "no") : typeof x === "number" || typeof x === "string" ? cleanLine(String(x), 60) : "";
+          return { label: labelText(s.label, lang, 40) || (s.key as string), value };
+        });
+      return {
+        id: a.id as string,
+        name: labelText(a.name, lang, 24) || (a.id as string),
+        enabled: a.enabled === undefined ? true : a.enabled === true,
+        needsSetup: a.needsSetup === true,
+        preview: parseCard(a.preview),
+        settings,
+      } satisfies AppView;
+    });
+}
 
 const ORDER = { needs: 0, working: 1, done: 2, idle: 3 } as const;
 
@@ -197,6 +243,7 @@ export function parseSnapshot(payload: unknown, t: PhoneStrings): SnapshotView |
     miblos: parseMiblos(p.miblos),
     gadget: gadgetSnapshot(p, at),
     app: screenAppOf(p),
+    apps: parseApps(p.apps, t.lang),
   };
 }
 

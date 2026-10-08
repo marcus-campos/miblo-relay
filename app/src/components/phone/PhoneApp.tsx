@@ -85,6 +85,7 @@ import { ApprovalCard, CodeEntry, ConfirmCard, ReuseQuestion, SessionScreen, Ups
 import { sentHowOf } from "./reply-model";
 import { MibloHero, MibloThumb } from "./MibloHero";
 import { LiveMiblo } from "./LiveMiblo";
+import { PhoneApps } from "./PhoneApps";
 import { acceptPetFrame } from "./pet-cache";
 import {
   agoText,
@@ -1230,6 +1231,11 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       {snap && (
         <div className={stale ? styles.stale : undefined}>
           <LiveMiblo t={t} snap={snap} lang={lang} />
+          {snap.apps.length > 0 && (
+            <Group title={t.apps.title} id="apps-title">
+              <PhoneApps t={t} apps={snap.apps} />
+            </Group>
+          )}
         </div>
       )}
       {snap && (

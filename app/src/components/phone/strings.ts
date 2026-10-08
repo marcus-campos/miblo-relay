@@ -11,6 +11,14 @@ function waitText(s: number): string {
 }
 
 const pt = {
+  lang: "pt" as "pt" | "en",
+  apps: {
+    title: "Apps",
+    help: "Os apps são ligados e configurados no app Miblo do computador.",
+    setup: (name: string) => `Configure o app ${name} no computador`,
+    off: "Desligado",
+    previewAlt: (name: string) => `${name}: o que ele mostra no Miblo`,
+  },
   appName: "Miblo",
   tabs: { now: "Agora", miblo: "Meu Miblo", settings: "Ajustes" },
   tabsLabel: "Seções do app",
@@ -457,6 +465,14 @@ const pt = {
 export type PhoneStrings = typeof pt;
 
 const en: PhoneStrings = {
+  lang: "en",
+  apps: {
+    title: "Apps",
+    help: "Apps are turned on and set up in the Miblo app on the computer.",
+    setup: (name: string) => `Set up the ${name} app on the computer`,
+    off: "Off",
+    previewAlt: (name: string) => `${name}: what it shows on the Miblo`,
+  },
   appName: "Miblo",
   tabs: { now: "Now", miblo: "My Miblo", settings: "Settings" },
   tabsLabel: "App sections",
