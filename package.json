@@ -1,6 +1,6 @@
 {
   "name": "miblo-relay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Self-hostable Miblo phone relay: end-to-end encrypted rooms, the phone registry and the Miblo phone app (PWA).",
   "license": "AGPL-3.0-only",
