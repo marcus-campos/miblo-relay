@@ -34,7 +34,7 @@ miblo.ai (ele só continua lendo do miblo.ai o manifesto assinado de atualizaç�
 
 ## Baixar e conferir
 
-O código é distribuído só pelo miblo.ai, em `https://miblo.ai/dl/relay/`, ao lado do firmware e
+O download é pelo miblo.ai, em `https://miblo.ai/dl/relay/`, ao lado do firmware e dos instaladores (quem prefere o Git encontra o código em https://github.com/marcus-campos/miblo-relay), e vem
 dos instaladores, e assinado com a mesma chave das releases do Miblo (Ed25519). A versão mais nova
 está em `https://miblo.ai/dl/extras/latest.json`; a página
 [miblo.ai/docs/servidor-proprio](https://miblo.ai/docs/servidor-proprio) mostra este guia e o link
@@ -217,7 +217,7 @@ miblo.ai (it still reads its signed update manifest from miblo.ai).
 
 ### Download and verify
 
-The source is distributed only from miblo.ai, at `https://miblo.ai/dl/relay/`, next to the
+The download comes from miblo.ai, at `https://miblo.ai/dl/relay/`, next to the firmware and the installers (the source is also on GitHub: https://github.com/marcus-campos/miblo-relay), next to the
 firmware and the installers, and signed with the key of Miblo's releases (Ed25519). The newest
 version is in `https://miblo.ai/dl/extras/latest.json`; the page
 [miblo.ai/en/docs/self-hosting](https://miblo.ai/en/docs/self-hosting) shows this guide and links
