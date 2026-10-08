@@ -9,7 +9,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Locale } from "@/lib/i18n";
 import { countdown, toolKind } from "./app-model";
 import { CountdownRing, Icon, Tech } from "./AppParts";
-import { allowable, inputView, type ApprovalView, type HistoryView, type ReplyAck, type TaskView, type Visible } from "./plus";
+import { allowable, inputView, type ApprovalView, type ConfirmView, type HistoryView, type ReplyAck, type TaskView, type Visible } from "./plus";
+import type { RequestRow } from "./account-join";
 import { ChatMessages, useScrollAnchor } from "./ChatView";
 import type { PhoneStrings } from "./strings";
 import styles from "./phone.module.css";
@@ -493,6 +494,173 @@ export function SessionScreen({
           </form>
         </div>
       </footer>
+    </div>
+  );
+}
+
+// --- v7: the computer shows the code, this phone types it ------------------------------------------
+
+/** Six digits typed in (spaces and dashes ignored), or null. */
+const sixDigits = (v: string) => {
+  const d = v.replace(/[\s-]/g, "");
+  return /^\d{6}$/.test(d) ? d : null;
+};
+
+function CodeInput({ id, value, onChange, label }: { id: string; value: string; onChange: (v: string) => void; label: string }) {
+  return (
+    <>
+      <label htmlFor={id} className="text-[0.95rem] font-bold">
+        {label}
+      </label>
+      <input
+        id={id}
+        className="input mono mt-1 w-full text-center text-[1.5rem] tracking-[0.3em]"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        maxLength={7}
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^\d ]/g, "").slice(0, 7))}
+        data-testid={id}
+      />
+    </>
+  );
+}
+
+/**
+ * The computers waiting for this phone (v7): each shows a 6-digit code on its screen; the person
+ * types it here and confirms with the passkey. A computer holding this phone until a phone it
+ * already has confirms it says so.
+ */
+export function CodeEntry({ t, requests, now, hasPasskey, onSubmit }: {
+  t: PhoneStrings;
+  requests: RequestRow[];
+  now: number;
+  hasPasskey: boolean;
+  onSubmit: (q: RequestRow, code: string) => Promise<"ok" | "cancelled" | "error" | "gone">;
+}) {
+  const typed = requests.filter((r) => r.state === "pending" && r.pake && Date.parse(r.expires_at ?? "") > now).slice(0, 3);
+  const held = requests.filter((r) => r.state === "confirm" && Date.parse(r.expires_at ?? "") > now).slice(0, 3);
+  if (!typed.length && !held.length) return null;
+  return (
+    <>
+      {typed.map((q) => (
+        <CodeCard key={`${q.device.id}-${q.pake!.n}`} t={t} q={q} hasPasskey={hasPasskey} onSubmit={onSubmit} />
+      ))}
+      {held.map((q) => (
+        <div key={q.device.id} className={styles.joinCard} role="status" data-testid="code-held">
+          <p className="font-bold">{t.code.held(q.device.name)}</p>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function CodeCard({ t, q, hasPasskey, onSubmit }: { t: PhoneStrings; q: RequestRow; hasPasskey: boolean; onSubmit: (q: RequestRow, code: string) => Promise<"ok" | "cancelled" | "error" | "gone"> }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const wrong = q.pake?.wrong ?? 0;
+  const send = async () => {
+    const c = sixDigits(code);
+    if (!c) return setNote(t.code.invalid);
+    setBusy(true);
+    setNote(null);
+    const r = await onSubmit(q, c);
+    setBusy(false);
+    setNote(r === "ok" ? t.code.sent : r === "cancelled" ? t.code.cancelled : r === "gone" ? t.code.gone : t.code.failed);
+    if (r === "ok") setCode("");
+  };
+  return (
+    <form className={styles.joinCard} data-testid="code-entry" onSubmit={(e) => (e.preventDefault(), void send())}>
+      <p className="text-[1.0625rem] font-bold">{t.code.title(q.device.name)}</p>
+      <p className="text-[0.95rem] text-ink-2">{t.code.help(q.device.name)}</p>
+      <CodeInput id={`code-${q.device.id}`} value={code} onChange={setCode} label={t.code.label} />
+      {wrong > 0 && <p className="font-bold text-amber-ink" role="status">{t.code.wrong(Math.max(0, 3 - wrong))}</p>}
+      {note && <p role="status" aria-live="polite">{note}</p>}
+      <button type="submit" className="btn btn-primary w-full" disabled={busy || !sixDigits(code)} aria-busy={busy} data-testid="code-submit">
+        {busy ? t.code.sending : hasPasskey ? t.code.submit : t.code.submitNoPasskey}
+      </button>
+    </form>
+  );
+}
+
+/** What a confirmation turns on, in this phone's own words (never text from the computer). */
+function confirmLines(t: PhoneStrings, c: ConfirmView): string[] {
+  if (c.what.kind === "admit") return [];
+  const out = c.what.on.map((id) => t.confirm.on[id] ?? id);
+  if (c.what.timeoutS !== null) out.push(t.confirm.timeout(c.what.timeoutS));
+  if (c.what.taskMaxMin !== null) out.push(t.confirm.taskMax(c.what.taskMaxMin));
+  for (const f of c.what.folders) out.push(t.confirm.folder(f));
+  return out;
+}
+
+/** A change asked on the computer `where`: the person types the code it shows and approves with the passkey. */
+export function ConfirmCard({ t, c, where, now, outcome, phoneOnly, onAnswer }: {
+  t: PhoneStrings;
+  c: ConfirmView;
+  where: string;
+  now: number;
+  outcome: string | null;
+  phoneOnly: boolean;
+  onAnswer: (c: ConfirmView, verdict: "confirm" | "deny", code: string) => Promise<boolean>;
+}) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const left = Math.max(0, Math.round((c.expires - now) / 1000));
+  const answer = async (verdict: "confirm" | "deny") => {
+    setBusy(true);
+    const ok = await onAnswer(c, verdict, sixDigits(code) ?? "");
+    setBusy(false);
+    if (ok) setCode("");
+  };
+  const lines = confirmLines(t, c);
+  const admit = c.what.kind === "admit" ? c.what.phone : null;
+  return (
+    <article className={styles.approval} data-testid="confirm-card" data-done={outcome ? "true" : undefined} aria-label={admit ? t.confirm.admitTitle(where) : t.confirm.title(where)}>
+      <p className={styles.approvalTool}>{admit ? t.confirm.admitTitle(where) : t.confirm.title(where)}</p>
+      {admit ? (
+        <p className="mt-1">{t.confirm.admitBody(admit.name, [admit.model, admit.place].filter(Boolean).join(", "))}</p>
+      ) : (
+        <ul className="mt-1 list-disc pl-5">
+          {lines.map((l) => (
+            <li key={l} className="break-words">{l}</li>
+          ))}
+        </ul>
+      )}
+      {outcome ? (
+        <p className="mt-2 font-bold" role="status">{t.confirm.done[outcome] ?? outcome}</p>
+      ) : left === 0 ? (
+        <p className="mt-2 font-bold" role="status">{t.confirm.done.expired}</p>
+      ) : phoneOnly ? (
+        <p className="mt-2 font-bold text-amber-ink">{t.confirm.phoneOnly}</p>
+      ) : (
+        <div className="mt-2 flex flex-col gap-2">
+          <p className="text-[0.95rem] text-ink-2">{t.confirm.help} {t.confirm.expires(left)}</p>
+          {c.left < 3 && <p className="font-bold text-amber-ink">{t.code.wrong(c.left)}</p>}
+          <CodeInput id={`confirm-${c.id}`} value={code} onChange={setCode} label={t.code.label} />
+          <button type="button" className="btn btn-primary w-full" disabled={busy || !sixDigits(code)} aria-busy={busy} onClick={() => void answer("confirm")} data-testid="confirm-approve">
+            {busy ? t.code.sending : t.confirm.approve}
+          </button>
+          <button type="button" className="btn btn-ghost w-full" disabled={busy} onClick={() => void answer("deny")} data-testid="confirm-deny">
+            {t.confirm.deny}
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+/** v7: this phone already has a Miblo passkey: use it (recommended) or make another. Asked once. */
+export function ReuseQuestion({ t, busy, onChoose }: { t: PhoneStrings; busy: boolean; onChoose: (choice: "reuse" | "create") => void }) {
+  return (
+    <div className={styles.joinCard} role="dialog" aria-labelledby="reuse-title" data-testid="reuse-question">
+      <p id="reuse-title" className="font-bold">{t.code.reuseTitle}</p>
+      <button type="button" className="btn btn-primary w-full" disabled={busy} onClick={() => onChoose("reuse")} data-testid="reuse-yes">
+        {t.code.reuseYes}
+      </button>
+      <button type="button" className="btn btn-ghost w-full" disabled={busy} onClick={() => onChoose("create")} data-testid="reuse-no">
+        {t.code.reuseNo}
+      </button>
     </div>
   );
 }

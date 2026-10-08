@@ -368,6 +368,8 @@ export async function deviceSummary(scope: RequestScope, device: LinkedDevice) {
     valid_until: null,
     devices: { used: await activeDeviceCount(scope, device.user_id), max: DEVICES_MAX },
     device: { id: device.id, name: device.name, platform: device.platform },
+    // The account's email ("Conectado como" on the computer): none on a self-hosted server.
+    email: null,
     rooms: rooms.results.map((r) => ({ room: r.room, plan: r.applied_plan, until: r.applied_until })),
   };
 }

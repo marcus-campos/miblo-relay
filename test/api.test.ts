@@ -248,6 +248,58 @@ describe("linked computers and the phone registry", () => {
     expect((await phone.get(`/api/phones/${id}/grants`)).status).toBe(404);
   });
 
+  it("v7: the computer's share reaches the phone (never a code), the phone's answer reaches only that computer once per attempt, one passkey per phone", async () => {
+    const phone = admin.browser;
+    const id = b64(16);
+    const ecdh = crypto.createECDH("prime256v1");
+    ecdh.generateKeys();
+    const pk = { id: b64(16), x: b64(32), y: b64(32) };
+    const pkwa = { cred: pk.id, ad: b64(37), cdj: b64(100), sig: b64(70) };
+    // A passkey the phone already has: its public key and an assertion, both or neither.
+    expect((await phone.post("/api/phones", { id, name: "Ana's Pixel", pub: ecdh.getPublicKey().toString("base64url"), pk })).status).toBe(400);
+    expect((await phone.post("/api/phones", { id, name: "Ana's Pixel", pub: ecdh.getPublicKey().toString("base64url"), pk, pkwa })).status).toBe(200);
+    const mine = await phone.get("/api/phones");
+    expect((mine.data.phones as { id: string; passkey: boolean }[]).find((p) => p.id === id)?.passkey).toBe(true);
+    expect(mine.data.passkeys as unknown[]).toContainEqual(pk);
+    const listed = async () => ((await json("/api/plus/phones", bearer(token))).data.phones as { id: string; pk?: unknown; request?: Record<string, unknown> }[]).find((p) => p.id === id);
+    expect(await listed()).toMatchObject({ pk, pkwa });
+    const cpub = crypto.createECDH("prime256v1");
+    cpub.generateKeys();
+    const CPUB = cpub.getPublicKey().toString("base64url");
+    const until = new Date(Date.now() + 15 * 60_000).toISOString();
+    const put = (body: unknown) => json(`/api/plus/phones/${id}/request`, bearer(token, "PUT", body));
+    const r1 = { n: 1, rs: b64(16), ya: b64(32), wrong: 0 };
+    expect((await put({ state: "pending", expiresAt: until, cpub: CPUB, pake: r1 })).status).toBe(200);
+    // Exactly one kind of round, and never a code.
+    expect((await put({ state: "pending", expiresAt: until, cpub: CPUB, pake: r1, commit: b64(32) })).status).toBe(400);
+    expect((await put({ state: "pending", expiresAt: until, cpub: CPUB, pake: { ...r1, code: "123456" } })).status).toBe(400);
+    expect(((await phone.get(`/api/phones/${id}/grants`)).data.requests as unknown[])[0]).toMatchObject({ state: "pending", cpub: CPUB, pake: r1 });
+    const answer = (r: { n: number; ya: string }) => ({ device: deviceId, n: r.n, ya: r.ya, yb: b64(32), tag: b64(32) });
+    expect((await phone.post(`/api/phones/${id}/pake`, answer({ ...r1, n: 2 }))).status).toBe(404);
+    expect((await phone.post(`/api/phones/${id}/pake`, answer({ ...r1, ya: b64(32) }))).status).toBe(404);
+    const a1 = answer(r1);
+    expect((await phone.post(`/api/phones/${id}/pake`, a1)).status).toBe(200);
+    expect((await phone.post(`/api/phones/${id}/pake`, a1)).status).toBe(200);
+    expect((await phone.post(`/api/phones/${id}/pake`, answer(r1))).status).toBe(409);
+    const { device: _d, ...stored } = a1;
+    expect((await listed())?.request).toEqual({ pake: { ...r1, answer: stored } });
+    // The same share keeps the answer; a new attempt clears it.
+    expect((await put({ state: "pending", expiresAt: until, cpub: CPUB, pake: r1 })).status).toBe(200);
+    expect(((await listed())?.request as { pake: { answer: unknown } }).pake.answer).toEqual(stored);
+    const r2 = { n: 2, rs: b64(16), ya: b64(32), wrong: 1 };
+    expect((await put({ state: "pending", expiresAt: until, cpub: CPUB, pake: r2 })).status).toBe(200);
+    expect((await listed())?.request).toEqual({ pake: { ...r2, answer: null } });
+    // Held for a confirmation on a phone the computer already has, then denied.
+    expect((await put({ state: "confirm", expiresAt: until })).status).toBe(200);
+    expect(((await phone.get(`/api/phones/${id}/grants`)).data.requests as unknown[])[0]).toMatchObject({ state: "confirm", expires_at: until });
+    expect((await phone.post(`/api/phones/${id}/pake`, answer(r2))).status).toBe(404);
+    expect((await put({ state: "denied" })).status).toBe(200);
+    expect(((await phone.get(`/api/phones/${id}/grants`)).data.requests as unknown[])[0]).toMatchObject({ state: "denied" });
+    // A self-hosted account has no email to show on the computer.
+    expect((await json("/api/plus/me", bearer(token))).data.email).toBeNull();
+    expect((await phone.post("/api/phones/revoke", { id })).status).toBe(200);
+  });
+
   it("v6 push: what the phone does reaches the computer's relay connection as a content-free hint, and the phone's long poll sees each computer step (measured end to end)", async () => {
     const phone = admin.browser;
     const hints: number[] = [];

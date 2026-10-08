@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { accountUrl } from "@/lib/account";
 import { href, type Locale } from "@/lib/i18n";
 import { assertPhonePasskey, platformPasskeys, rpIdFor } from "@/lib/webauthn";
-import { MfaVerify, loadMfa, type MfaState } from "@/components/community/security";
+import { MfaVerify, call, loadMfa, type MfaState } from "@/components/community/security";
 import {
   currentSubscription,
   isIos,
@@ -38,6 +38,9 @@ import {
   sendSasAnswers,
   syncGrants,
   waitingFor,
+  answerCode,
+  passkeyPlan,
+  type PhonePk,
   type GrantsResult,
   type RequestRow,
   type ShownCode,
@@ -52,6 +55,12 @@ import {
   parseRekey,
   parseApproval,
   parseApprovalDone,
+  parseConfirm,
+  parseConfirmDone,
+  parseConfirmResult,
+  confirmChallenge,
+  confirmPayload,
+  type ConfirmView,
   parseHistory,
   parseReplyAck,
   parseTaskAck,
@@ -68,7 +77,7 @@ import {
   type TaskAck,
   type TaskInfo,
 } from "./plus";
-import { ApprovalCard, SessionScreen, Upsell, type ActBlock } from "./PlusViews";
+import { ApprovalCard, CodeEntry, ConfirmCard, ReuseQuestion, SessionScreen, Upsell, type ActBlock } from "./PlusViews";
 import { MibloHero, MibloThumb } from "./MibloHero";
 import { acceptPetFrame } from "./pet-cache";
 import {
@@ -101,10 +110,15 @@ type PlusRoom = {
   /** v6 "Nova tarefa": what the computer allows (null until asked), and its answers to tasks. */
   taskInfo: TaskInfo | null;
   taskAcks: Record<string, TaskAck>;
+  /** v7: what the computer asks to turn on, confirmed here with the code it shows; how each ended. */
+  confirms: ConfirmView[];
+  confirmDone: Record<string, string>;
 };
 /** After a 4402 (room not on Miblo+), the phone sends nothing Miblo+ to that room for this long. */
 const PLAN_REFUSED_MS = 10 * 60 * 1000;
-const emptyPlus = (): PlusRoom => ({ caps: null, histories: {}, approvals: [], outcomes: {}, acks: {}, lastReply: {}, taskInfo: null, taskAcks: {} });
+const emptyPlus = (): PlusRoom => ({ caps: null, histories: {}, approvals: [], outcomes: {}, acks: {}, lastReply: {}, taskInfo: null, taskAcks: {}, confirms: [], confirmDone: {} });
+/** v7: the person chose to re-use this phone's passkey: later joins re-use it without asking. */
+const REUSE_KEY = "miblo.passkeyReuse";
 /** The time now, for event handlers (frames are stamped with it). */
 const wallClock = () => Date.now();
 /** Cards of answered or expired approvals linger this long, then go. */
@@ -139,7 +153,7 @@ type JoinState =
   | { k: "signedOut" }
   | { k: "mfa"; state: MfaState }
   | { k: "mfaSetup" }
-  | { k: "join"; uid: string; email: string; csrf: string }
+  | { k: "join"; uid: string; email: string; csrf: string; passkeys: PhonePk[] }
   | { k: "ready"; uid: string; email: string; csrf: string; me: AccountIdentity; requests: RequestRow[] }
   | { k: "error" };
 type NotifyState = "unknown" | "unsupported" | "ios-install" | "default" | "denied" | "enabled" | "busy";
@@ -338,7 +352,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       if (!loaded || !loaded.registered || !acct.phones.some((x) => x.id === loaded.id)) {
         // Not joined yet, or removed from the account: (again) a new identity.
         if (loaded) await deleteIdentity(acct.uid).catch(() => {});
-        return setJoin({ k: "join", uid: acct.uid, email: st.email ?? "", csrf: st.csrf ?? "" });
+        return setJoin({ k: "join", uid: acct.uid, email: st.email ?? "", csrf: st.csrf ?? "", passkeys: Array.isArray(acct.passkeys) ? acct.passkeys : [] });
       }
       let me: AccountIdentity = loaded;
       const meNow = me;
@@ -417,13 +431,33 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     };
   }, [hasPairings]);
 
-  // Joining: the identity (ECDH key, id, passkey) made here, registered with the account.
-  const joinAccount = async () => {
+  // Joining: the identity (ECDH key, id, passkey) made here, registered with the account. v7: a
+  // passkey of this account may already be on this phone: the person chooses once whether to use
+  // it (remembered); a new one is made only when there is none, or the person asks for another.
+  const [reuseAsk, setReuseAsk] = useState(false);
+  const [repair, setRepair] = useState<"idle" | "busy" | "failed">("idle");
+  const joinAccount = async (choice: "reuse" | "create" | null = null) => {
     if (join.k !== "join") return;
+    let remembered = false;
+    try {
+      remembered = localStorage.getItem(REUSE_KEY) === "1";
+    } catch {
+      remembered = false;
+    }
+    const plan = passkeys === true ? passkeyPlan(join.passkeys.length, remembered, choice) : "create";
+    if (plan === "ask") return setReuseAsk(true);
+    setReuseAsk(false);
+    if (choice === "reuse") {
+      try {
+        localStorage.setItem(REUSE_KEY, "1");
+      } catch {
+        // No storage: asked again next time.
+      }
+    }
     setJoinBusy(true);
     setJoinNote(null);
     try {
-      const made = await makeIdentity(join.uid, deviceName(navigator.userAgent), passkeys === true);
+      const made = await makeIdentity(join.uid, deviceName(navigator.userAgent), passkeys === true, plan === "reuse" ? join.passkeys : []);
       const r = await registerIdentity(join.csrf, made);
       if (r === "ok") setJoinTick((n) => n + 1);
       else if (r === "mfa") {
@@ -448,7 +482,22 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     say(yes ? t.trust.confirmed(c.name) : t.trust.rejected);
     setJoinTick((n) => n + 1);
   };
-  const trustCards = <TrustCards t={t} codes={codes} toConfirm={toConfirm} keyMismatch={keyMismatch} sasAlert={sasAlert} onAnswer={(c, yes) => void answerComputer(c, yes)} />;
+  // v7: the person typed a computer's code here.
+  const typeCode = async (q: RequestRow, code: string) => {
+    if (join.k !== "ready") return "error" as const;
+    const r = await answerCode(join.csrf, join.me, q, code);
+    setJoin((cur) => (cur.k === "ready" && cur.me.id === r.me.id ? { ...cur, me: r.me } : cur));
+    if (r.result === "ok") setJoinTick((n) => n + 1);
+    return r.result;
+  };
+  const trustCards = (
+    <>
+      {join.k === "ready" && <CodeEntry t={t} requests={join.requests} now={now} hasPasskey={!!join.me.credId} onSubmit={typeCode} />}
+      <TrustCards t={t} codes={codes} toConfirm={toConfirm} keyMismatch={keyMismatch} sasAlert={sasAlert} onAnswer={(c, yes) => void answerComputer(c, yes)} />
+    </>
+  );
+  // v7: joining, from the join screen or after "Ligar de novo": the passkey question, or the button.
+  const joinCard = join.k === "join" && reuseAsk ? <ReuseQuestion t={t} busy={joinBusy} onChoose={(c) => void joinAccount(c)} /> : null;
 
   // Alerts: what the browser allows, and the existing subscription (re-sent to every room).
   useEffect(() => {
@@ -501,6 +550,24 @@ export function PhoneApp({ lang }: { lang: Locale }) {
         newerHistory(r.histories[h.session], h, Date.now()) ? { ...r, histories: { ...r.histories, [h.session]: h } } : r,
       );
     } else if (ch === "approval") {
+      // v7: a change asked on the computer, its end, or a wrong code.
+      const cdone = parseConfirmDone(payload);
+      if (cdone) {
+        updatePlus(p.room, (r) => ({ ...r, confirmDone: { ...r.confirmDone, [cdone.id]: cdone.outcome } }));
+        return;
+      }
+      const cres = parseConfirmResult(payload);
+      if (cres) {
+        updatePlus(p.room, (r) => ({ ...r, confirms: r.confirms.map((c) => (c.id === cres.id ? { ...c, left: cres.left } : c)) }));
+        say(t.code.wrong(cres.left));
+        return;
+      }
+      if ((payload as { kind?: unknown } | null)?.kind === "confirm") {
+        void parseConfirm(payload, Date.now()).then((c) => {
+          if (c) updatePlus(p.room, (r) => (r.confirmDone[c.id] ? r : { ...r, confirms: [...r.confirms.filter((x) => x.id !== c.id), c].slice(-4) }));
+        });
+        return;
+      }
       const done = parseApprovalDone(payload);
       if (done) {
         updatePlus(p.room, (r) => ({
@@ -520,7 +587,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       const tack = parseTaskAck(payload);
       if (tack) updatePlus(p.room, (r) => ({ ...r, taskAcks: { ...r.taskAcks, [tack.nonce]: tack } }));
     }
-  }, [t, updatePlus]);
+  }, [t, updatePlus, say]);
 
   // One relay connection per paired computer.
   useEffect(() => {
@@ -600,6 +667,28 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       return false;
     }
     say(t.plus.approvalSent);
+    return true;
+  };
+
+  // v7: the person typed the computer's code for a change it asks for (or denies it).
+  const answerConfirm = async (p: StoredPairing, c: ConfirmView, verdict: "confirm" | "deny", code: string): Promise<boolean> => {
+    const client = clients.current.get(p.room);
+    if (!client || !p.phone) return false;
+    const built = await confirmPayload({ phone: p.phone.id, macKey: p.phone.macKey }, p.room, c, verdict, code, wallClock());
+    let wa;
+    if (verdict === "confirm") {
+      try {
+        wa = await assertPhonePasskey({ rpId: rpIdFor(location.hostname), credId: p.phone.credId, challenge: await confirmChallenge(p.room, p.phone.id, c, built.proof) });
+      } catch {
+        say(t.code.cancelled);
+        return false;
+      }
+    }
+    if (!(await client.sendUp("approval", { ...built.payload, ...(wa ? { wa } : {}) }))) {
+      say(t.plus.replyOffline);
+      return false;
+    }
+    say(t.code.sent);
     return true;
   };
 
@@ -865,6 +954,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
               note={joinNote}
               links={links}
               onJoin={() => void joinAccount()}
+              reuse={joinCard}
               onCheck={() => setJoinTick((n) => n + 1)}
               trust={trustCards}
               now={now}
@@ -902,8 +992,29 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   const stale = !!snap && now - snap.at > STALE_MS;
   const block = actBlock(current, caps, passkeys, currentLive?.link);
   const link = currentLive?.link ?? "connecting";
-  // v5's "pair again" is now: read the account's grants again (the computer re-grants by itself).
-  const pairAgain = () => setJoinTick((n) => n + 1);
+  // "Ligar de novo" after the computer refused this phone (it revoked it: it never takes the same
+  // phone identity again) or deleted its room: a real new pairing. The stale pairing and this
+  // phone's identity go (the identity's account entry too when no other computer uses it), and the
+  // join card asks to join again; the computer then shows a new code to type here.
+  const pairAgain = async () => {
+    if (repair === "busy") return;
+    setRepair("busy");
+    try {
+      const room = current.room;
+      const others = (pairings ?? []).filter((x) => x.room !== room && x.acct);
+      if (join.k === "ready") {
+        if (!others.length) await call("/api/phones/revoke", { id: join.me.id }, join.csrf).catch(() => null);
+        await deleteIdentity(join.uid);
+      }
+      await removePairing(room);
+      setPairings((cur) => cur?.filter((x) => x.room !== room) ?? cur);
+      setSelected((cur) => (cur === room ? (others[0]?.room ?? null) : cur));
+      setRepair("idle");
+      setJoinTick((n) => n + 1);
+    } catch {
+      setRepair("failed");
+    }
+  };
 
   const picker = all.length > 1 && (
     <nav aria-label={t.computerPicker} className={styles.tabs}>
@@ -919,9 +1030,30 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     </nav>
   );
 
+  const phoneOnly = !!device && !device.ios && !device.android;
+  const confirmCards = all.flatMap((p) =>
+    (plus[p.room]?.confirms ?? [])
+      .filter((c) => c.expires + DONE_LINGER_MS > now)
+      .map((c) => (
+        <ConfirmCard key={c.id} t={t} c={c} where={p.name} now={now} outcome={plus[p.room]?.confirmDone[c.id] ?? null} phoneOnly={phoneOnly}
+          onAnswer={(cv, verdict, code) => answerConfirm(p, cv, verdict, code)} />
+      )),
+  );
   const nowTab = (
     <>
       {picker}
+      {confirmCards}
+      {join.k === "join" && (
+        <div className={styles.joinCard}>
+          <p>{t.join.joinBody(join.email)}</p>
+          {joinNote && <p role="status" className="font-bold text-amber-ink">{joinNote}</p>}
+          {joinCard ?? (
+            <button type="button" className="btn btn-primary w-full" onClick={() => void joinAccount()} disabled={joinBusy || passkeys === null} aria-busy={joinBusy} data-testid="join-button">
+              {joinBusy ? t.join.joining : t.join.joinButton}
+            </button>
+          )}
+        </div>
+      )}
       {trustCards}
       {(status.tone === "bad" || link === "limit") && (
         <Notice
@@ -929,9 +1061,12 @@ export function PhoneApp({ lang }: { lang: Locale }) {
           role="alert"
           action={
             link === "refused" || link === "deleted" ? (
-              <button type="button" className="btn btn-primary mt-3 w-full" onClick={pairAgain}>
-                {t.status.pairAgain}
-              </button>
+              <>
+                <button type="button" className="btn btn-primary mt-3 w-full" onClick={() => void pairAgain()} disabled={repair === "busy"} aria-busy={repair === "busy"} data-testid="pair-again">
+                  {repair === "busy" ? t.code.repairing : repair === "failed" ? t.code.retry : t.status.pairAgain}
+                </button>
+                {repair === "failed" && <p role="status" className="mt-2">{t.code.repairFailed}</p>}
+              </>
             ) : link === "revoked" ? (
               <Tech t={t} commands={[t.tech.link]} />
             ) : undefined
@@ -1515,6 +1650,7 @@ function JoinScreen({
   now,
   onAskAgain,
   trust,
+  reuse,
 }: {
   t: PhoneStrings;
   lang: Locale;
@@ -1527,6 +1663,7 @@ function JoinScreen({
   onJoin: () => void;
   onCheck: () => void;
   trust: React.ReactNode;
+  reuse?: React.ReactNode;
   now: number;
   onAskAgain: () => Promise<void>;
 }) {
@@ -1534,7 +1671,7 @@ function JoinScreen({
   return (
     <section aria-labelledby="join-title" className="pt-2" data-testid="join-screen" data-state={join.k}>
       <h1 id="join-title" className={styles.pairTitle}>
-        {join.k === "ready" ? (waiting?.kind === "pending" ? t.join.allowTitle : t.join.waitingTitle) : join.k === "join" ? t.join.joinTitle : join.k === "mfa" ? t.join.confirmTitle : t.join.title}
+        {join.k === "ready" ? (waiting?.kind === "pending" || waiting?.kind === "code" ? t.join.allowTitle : t.join.waitingTitle) : join.k === "join" ? t.join.joinTitle : join.k === "mfa" ? t.join.confirmTitle : t.join.title}
       </h1>
       {legacy && join.k !== "ready" && (
         <div className="mt-3">
@@ -1572,14 +1709,18 @@ function JoinScreen({
               {note}
             </p>
           )}
-          <button type="button" className="btn btn-primary w-full" onClick={onJoin} disabled={busy || passkeys === null} aria-busy={busy} data-testid="join-button">
-            {busy ? t.join.joining : t.join.joinButton}
-          </button>
+          {reuse ?? (
+            <button type="button" className="btn btn-primary w-full" onClick={onJoin} disabled={busy || passkeys === null} aria-busy={busy} data-testid="join-button">
+              {busy ? t.join.joining : t.join.joinButton}
+            </button>
+          )}
         </div>
       ) : (
         <div className={styles.joinCard} data-testid="join-waiting" data-state={waiting?.kind ?? "none"}>
           <p className="text-[0.95rem] text-ink-2">{t.join.signedInAs(join.email)}</p>
-          {waiting?.kind === "pending" ? (
+          {waiting?.kind === "code" ? (
+            <p className="font-bold" role="status">{t.code.help(waiting.device)}</p>
+          ) : waiting?.kind === "confirm" ? null : waiting?.kind === "pending" ? (
             <div role="status" aria-live="polite">
               <p className="font-bold">{t.join.allowBody}</p>
               <p className="text-[0.95rem] text-ink-2">{t.join.allowOn(waiting.device, Math.max(1, Math.round((waiting.expiresAt - now) / 60_000)))}</p>

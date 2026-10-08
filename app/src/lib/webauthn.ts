@@ -129,7 +129,8 @@ export async function fingerprint(credId: string, x: string, y: string): Promise
 export type Enrolled = { credId: string; att: string; cdj: string; fp: string };
 
 /**
- * Makes this phone's passkey for one computer: platform authenticator, user verification required,
+ * Makes this phone's passkey (v7: one per phone and account, re-used by every later identity and
+ * every computer; before 1.23 one was made per identity): platform authenticator, user verification required,
  * discoverable when possible, ES256, no attestation. Throws when the user cancels or the device
  * cannot.
  */
@@ -137,7 +138,7 @@ export async function createPhonePasskey(p: { rpId: string; challenge: Uint8Arra
   const cred = (await navigator.credentials.create({
     publicKey: {
       rp: { id: p.rpId, name: "Miblo" },
-      user: { id: fromB64url(p.phoneId), name: `Miblo · ${p.computer}`, displayName: `Miblo · ${p.computer}` },
+      user: { id: fromB64url(p.phoneId), name: p.computer ? `Miblo · ${p.computer}` : "Miblo", displayName: p.computer ? `Miblo · ${p.computer}` : "Miblo" },
       challenge: p.challenge,
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
       authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "preferred" },
@@ -162,6 +163,27 @@ export async function assertPhonePasskey(p: { rpId: string; credId: string; chal
       rpId: p.rpId,
       challenge: p.challenge,
       allowCredentials: [{ type: "public-key", id: fromB64url(p.credId) }],
+      userVerification: "required",
+      timeout: 60_000,
+    },
+  })) as PublicKeyCredential | null;
+  if (!cred) throw new Error("cancelled");
+  const res = cred.response as AuthenticatorAssertionResponse;
+  return {
+    cred: b64url(new Uint8Array(cred.rawId)),
+    ad: b64url(new Uint8Array(res.authenticatorData)),
+    cdj: b64url(new Uint8Array(res.clientDataJSON)),
+    sig: b64url(new Uint8Array(res.signature)),
+  };
+}
+
+/** v7: one of the passkeys this phone may already have (`credIds`), over `challenge`, with user verification. Throws when none answers. */
+export async function assertAnyPhonePasskey(p: { rpId: string; credIds: string[]; challenge: Uint8Array<ArrayBuffer> }): Promise<Assertion> {
+  const cred = (await navigator.credentials.get({
+    publicKey: {
+      rpId: p.rpId,
+      challenge: p.challenge,
+      allowCredentials: p.credIds.map((id) => ({ type: "public-key" as const, id: fromB64url(id) })),
       userVerification: "required",
       timeout: 60_000,
     },

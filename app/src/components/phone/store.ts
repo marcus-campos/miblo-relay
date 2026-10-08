@@ -52,7 +52,11 @@ export type AccountIdentity = {
   pins?: Pin[];
   /** The code exchanges in progress (this phone's nonce per commitment, and the code once shown). */
   rounds?: SasRound[];
+  /** v7: the code exchanges this phone answered (the key each gave; a grant whose confirmation matches pins its computer). */
+  pakes?: PakeRun[];
 };
+/** v7: one answer this phone gave to a computer's code exchange. */
+export type PakeRun = { device: string; cpub: string; isk: string; at: number };
 
 /** The pairing window lasts 10 minutes on the computer (plugin lib/plus/phones.js WINDOW_MS). */
 export const ENROLL_WINDOW_MS = 10 * 60 * 1000;

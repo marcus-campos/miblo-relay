@@ -6,15 +6,16 @@
 //   setup + second factor               the server's one account
 //   miblo account link                  device flow, the code confirmed on the account page
 //   miblo phone on + the bridge          the writer connects (after the identity proof), the room is registered
-//   a phone joins the account            the 6-digit code exchange (pushed: the server's hints, the
-//                                        phone's long poll; join to code timed), `miblo phone approve`,
-//                                        the sealed grant
+//   a phone joins the account            v7: the computer shows a 6-digit code (`miblo phone pending`),
+//                                        the phone types it (the PAKE answer through this server, pushed:
+//                                        the server's hints, the phone's long poll; join to grant timed),
+//                                        the sealed grant with the computer's confirmation
 //   the phone connects as a reader       and decrypts the live snapshot the bridge sends
 //   miblo phone off                      the room is deleted on this server
 // and nothing at all is sent to miblo.ai.
 //
 // The plugin is not part of this repository: set MIBLO_PLUGIN_DIR to a checkout's plugin/ folder
-// (a version with `miblo server`). Without it this file is skipped.
+// (1.23 or later: `miblo server` and the v7 code exchange, lib/plus/pake.js). Without it this file is skipped.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,9 +25,9 @@ import { WebSocket } from "ws";
 import { adminWithTotp, Browser, freePort, startServer, totpNow } from "../helpers/server";
 
 const candidates = [process.env.MIBLO_PLUGIN_DIR, path.resolve(__dirname, "../../../claude_gadget/.worktrees/selfhost/plugin")].filter(Boolean) as string[];
-const pluginDir = candidates.find((d) => fs.existsSync(path.join(d, "lib", "server-cli.js")));
+const pluginDir = candidates.find((d) => fs.existsSync(path.join(d, "lib", "server-cli.js")) && fs.existsSync(path.join(d, "lib", "plus", "pake.js")));
 const suite = pluginDir ? describe : describe.skip;
-if (!pluginDir) console.warn("e2e: MIBLO_PLUGIN_DIR is not set to a plugin with `miblo server`; skipping the plugin end-to-end test.");
+if (!pluginDir) console.warn("e2e: MIBLO_PLUGIN_DIR is not set to a 1.23+ plugin (`miblo server`, v7); skipping the plugin end-to-end test.");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -141,7 +142,7 @@ suite("the plugin against a self-hosted server", () => {
     const t0 = Date.now();
     expect((await pb.post("/api/phones", { id: listing.id, name: listing.name, pub: listing.pub, att: listing.att, cdj: listing.cdj })).status).toBe(200);
 
-    // The computer asks the person, with a round of the code exchange; the phone answers it.
+    // The computer asks the person, with an attempt of the code exchange (its share, never the code).
     let sig: string | null = null;
     const next = async (want: (r: Any) => unknown) => {
       for (let i = 0; i < 10; i++) {
@@ -153,29 +154,25 @@ suite("the plugin against a self-hosted server", () => {
       throw new Error("timed out");
     };
     await read();
-    const req1 = await next((r: Any) => r.commit);
-    const pnonce = phone.sasAnswer({ commit: req1.commit, cpub: req1.cpub });
-    expect((await pb.post(`/api/phones/${phone.id}/sas`, { device: req1.device.id, commit: req1.commit, pnonce })).status).toBe(200);
+    const req = await next((r: Any) => r.pake);
+    expect(req.commit ?? null).toBeNull();
+    // The person reads the code this computer shows (`miblo phone pending`) and types it on the phone.
+    const pending = JSON.parse((await phoneCommand(["pending", "--json"], { dataDir, hostname: "Ana-Mac", gate: terminal })).out) as Any[];
+    const code = pending.find((p: Any) => p.id === phone.id)?.code as string;
+    expect(code).toMatch(/^\d{6}$/);
+    expect(JSON.stringify(req)).not.toContain(code);
+    expect((await pb.post(`/api/phones/${phone.id}/pake`, { device: req.device.id, ...phone.answer(req, code) })).status).toBe(200);
+    // The computer checks the answer (told by the server's hint) and seals the grant by itself.
     await read();
-    const req2 = await next((r: Any) => r.nonce);
-    const code = phone.sasCode({ commit: req2.commit, nonce: req2.nonce });
-    const ms = Date.now() - t0;
-    if (push) {
-      console.log(`push (real plugin bridge + self-hosted server, loopback): phone join -> code in ${ms} ms`);
-      expect(ms).toBeLessThan(5000);
-    }
-
-    // The person types the code the phone shows, on the computer; the computer seals the grant.
-    // (`notifyBridge`: what the CLI tells the running bridge over its local API.)
-    const approved = await phoneCommand(["approve", phone.id.slice(0, 8), "--code", code], {
-      dataDir, hostname: "Ana-Mac", gate: terminal, notifyBridge: (p: string) => bridge.plus.route("POST", p, {}),
-    });
-    expect(approved.code, approved.out).toBe(0);
-    await bridge.plus.accountPhones.sync();
     const grants = await until(async () => {
       const g = (await pb.get(`/api/phones/${phone.id}/grants`)).data.grants as Any[];
       return g?.length ? g : null;
     });
+    const ms = Date.now() - t0;
+    if (push) {
+      console.log(`push (real plugin bridge + self-hosted server, loopback): phone join -> grant in ${ms} ms`);
+      expect(ms).toBeLessThan(8000);
+    }
     const opened = phone.trustedOpen(grants![0]);
     expect(opened).toMatchObject({ v: 6, kind: "grant", room: secrets.room, key: secrets.key });
 

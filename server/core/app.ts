@@ -56,7 +56,7 @@ import {
   startDeviceAuthorization,
   DEVICES_MAX,
 } from "./devices";
-import { answerSas, askAgain, deleteGrant, listPhones, nudgeComputersLater, phoneModel, phonesForDevice, putGrant, putRequest, registerPhone, revokePhone, waitForGrants } from "./phones";
+import { answerPake, answerSas, askAgain, deleteGrant, listPasskeys, listPhones, nudgeComputersLater, phoneModel, phonesForDevice, putGrant, putRequest, registerPhone, revokePhone, waitForGrants } from "./phones";
 
 type Handler = (scope: RequestScope, request: Request, params: string[]) => Promise<Response>;
 type Route = { method: string; path: RegExp; handler: Handler };
@@ -294,7 +294,8 @@ const ROUTES: Route[] = [
       token: out.token,
       token_type: "Bearer",
       device: out.device,
-      account: { plan: "plus", status: "active", current_period_end: null, valid_until: null, devices: { used: out.devicesUsed, max: DEVICES_MAX } },
+      // `email`: null here (accounts on a self-hosted server have a username, no email).
+      account: { plan: "plus", status: "active", current_period_end: null, valid_until: null, devices: { used: out.devicesUsed, max: DEVICES_MAX }, email: null },
     });
   }),
   // The link page's form token (its own form only: a code never reaches the confirmation from a link).
@@ -396,7 +397,7 @@ const ROUTES: Route[] = [
   route("PUT", `/api/plus/phones/${ID}/request`, async (scope, request, [id]) => {
     const r = await deviceRequest(scope, request, S.phoneRequestSchema);
     if (!r.ok) return r.response;
-    const out = await putRequest(scope, r.device, id, { state: r.data.state, expiresAt: r.data.expiresAt ?? null, commit: r.data.commit, cpub: r.data.cpub, nonce: r.data.nonce ?? null });
+    const out = await putRequest(scope, r.device, id, { state: r.data.state, expiresAt: r.data.expiresAt ?? null, commit: r.data.commit, cpub: r.data.cpub, nonce: r.data.nonce ?? null, pake: r.data.pake });
     if (!out.ok) return error(out.error, out.status);
     return json({ ok: true });
   }),
@@ -408,7 +409,8 @@ const ROUTES: Route[] = [
     if (!r.session) return error("unauthorized", 401);
     const blocked = mfaBlock(r.session, "session");
     if (blocked) return blocked;
-    return json({ uid: r.session.user.id, phones: await listPhones(scope, r.session.user.id) });
+    // `passkeys` (v7): the public keys of the account's phone passkeys, so this phone can re-use its own.
+    return json({ uid: r.session.user.id, phones: await listPhones(scope, r.session.user.id), passkeys: await listPasskeys(scope, r.session.user.id) });
   }),
   route("POST", "/api/phones", async (scope, request) => {
     const r = await memberRequest(scope, request, S.phoneRegisterSchema, { mfa: "fresh" });
@@ -458,6 +460,18 @@ const ROUTES: Route[] = [
     const out = await answerSas(scope, r.session.user.id, id, r.data);
     if (!out.ok) return error(out.error, out.status);
     // The same answer again (the phone repeats it until the nonce is out) tells nobody again.
+    if (out.fresh) nudgeComputersLater(scope, r.session.user.id);
+    return json({ ok: true });
+  }),
+  // v7: this phone's answer to one attempt of a computer's code exchange (the person typed the code
+  // that computer shows), once per attempt; the computer checks it. The server cannot read the code
+  // from it, and never lets the phone in by itself.
+  route("POST", `/api/phones/${ID}/pake`, async (scope, request, [id]) => {
+    const r = await memberRequest(scope, request, S.phonePakeSchema, { mfa: "session" });
+    if (!r.ok) return r.response;
+    if (accountActionLimited(r.session.user.id, "sessions")) return tooMany();
+    const out = await answerPake(scope, r.session.user.id, id, r.data);
+    if (!out.ok) return error(out.error, out.status);
     if (out.fresh) nudgeComputersLater(scope, r.session.user.id);
     return json({ ok: true });
   }),

@@ -587,3 +587,96 @@ export function parseRekey(payload: unknown, sealed: boolean, held: number, now:
   if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= held) return null;
   return { readToken, key, epoch };
 }
+
+// --- v7: confirmations on the phone (a change asked on the computer, with the code it shows) ------
+
+/** What the computer asks to turn on (plain data, rendered by the phone in its own words). */
+export type ConfirmWhat =
+  | { kind: "settings"; on: string[]; timeoutS: number | null; taskMaxMin: number | null; folders: string[] }
+  | { kind: "admit"; phone: { id: string; name: string; model: string | null; place: string | null } };
+export type ConfirmView = { id: string; nonce: string; what: ConfirmWhat; cap: string; at: number; expires: number; left: number };
+export type ConfirmDone = { id: string; outcome: string };
+export type ConfirmResult = { id: string; reason: string; left: number };
+
+const ON_IDS = new Set(["approvals", "replies", "history", "permissive", "tasks"]);
+
+/** A canonical JSON (keys sorted), as the computer hashes `what` into `cap`. */
+function canonical(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v ?? null);
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  const o = v as Record<string, unknown>;
+  return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+}
+
+/**
+ * A confirmation request, checked: `cap` must be the hash of exactly the `what` shown (the phone
+ * signs `cap`, so it can only confirm what it displays), every field plain and bounded.
+ */
+export async function parseConfirm(payload: unknown, now: number): Promise<ConfirmView | null> {
+  const p = obj(payload);
+  if (!p || p.kind !== "confirm" || typeof p.id !== "string" || !REQ_RE.test(p.id) || typeof p.nonce !== "string" || !REQ_RE.test(p.nonce)) return null;
+  if (typeof p.cap !== "string" || !HASH_RE.test(p.cap)) return null;
+  const at = num(p.at);
+  const expires = num(p.expires);
+  if (at === null || expires === null || at > now + MAX_FUTURE_MS || expires <= now) return null;
+  const w = obj(p.what);
+  let what: ConfirmWhat | null = null;
+  if (w?.kind === "settings" && Array.isArray(w.on) && Array.isArray(w.folders)) {
+    const on = w.on.filter((x): x is string => typeof x === "string" && ON_IDS.has(x));
+    const folders = w.folders.filter((x): x is string => typeof x === "string").map((x) => cleanDisplay(x, 240));
+    if (on.length !== w.on.length || folders.length !== w.folders.length || folders.length > 12) return null;
+    const int = (v: unknown) => (v === null ? null : typeof v === "number" && Number.isSafeInteger(v) && v > 0 && v < 10_000 ? v : undefined);
+    const timeoutS = int(w.timeoutS);
+    const taskMaxMin = int(w.taskMaxMin);
+    if (timeoutS === undefined || taskMaxMin === undefined) return null;
+    what = { kind: "settings", on, timeoutS, taskMaxMin, folders: w.folders as string[] };
+  } else if (w?.kind === "admit") {
+    const ph = obj(w.phone);
+    if (!ph || typeof ph.id !== "string" || !PHONE_RE.test(ph.id) || typeof ph.name !== "string") return null;
+    const opt = (v: unknown) => (v === null ? null : typeof v === "string" ? v : undefined);
+    const model = opt(ph.model);
+    const place = opt(ph.place);
+    if (model === undefined || place === undefined) return null;
+    what = { kind: "admit", phone: { id: ph.id, name: ph.name, model, place } };
+  }
+  if (!what) return null;
+  // The hash is recomputed over what is shown: the phone signs this very request.
+  if ((await sha256Text(canonical(what))) !== p.cap) return null;
+  const left = typeof p.left === "number" && Number.isSafeInteger(p.left) ? Math.max(0, Math.min(3, p.left)) : 3;
+  return { id: p.id, nonce: p.nonce, what, cap: p.cap, at, expires: Math.min(expires, now + APPROVAL_MAX_MS), left };
+}
+
+export function parseConfirmDone(payload: unknown): ConfirmDone | null {
+  const p = obj(payload);
+  if (!p || p.kind !== "confirm_done" || typeof p.id !== "string" || !REQ_RE.test(p.id) || typeof p.outcome !== "string") return null;
+  return { id: p.id, outcome: p.outcome.slice(0, 20) };
+}
+
+export function parseConfirmResult(payload: unknown): ConfirmResult | null {
+  const p = obj(payload);
+  if (!p || p.kind !== "confirm_result" || typeof p.id !== "string" || !REQ_RE.test(p.id)) return null;
+  return { id: p.id, reason: typeof p.reason === "string" ? p.reason.slice(0, 20) : "", left: typeof p.left === "number" ? Math.max(0, Math.min(3, p.left)) : 0 };
+}
+
+const enc7 = new TextEncoder();
+async function hmacB64(macKey: CryptoKey, text: string): Promise<string> {
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", macKey, enc7.encode(text)));
+  return btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** The challenge this phone's passkey signs to confirm `c` with the code proof (plugin confirm.js). */
+export async function confirmChallenge(room: string, phone: string, c: ConfirmView, proof: string): Promise<Uint8Array<ArrayBuffer>> {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc7.encode(["miblo-confirm-wa-v7", room, phone, c.id, c.cap, c.nonce, proof].join("|"))));
+}
+
+/**
+ * The answer to a confirmation: "confirm" with the code the person typed (only its proof travels,
+ * an HMAC under this phone's MAC key; the caller adds the passkey assertion over confirmChallenge
+ * as `wa`), or "deny" (MAC only).
+ */
+export async function confirmPayload(signer: Signer, room: string, c: ConfirmView, verdict: "confirm" | "deny", code: string, now: number, nonce = randomNonce()): Promise<{ payload: Record<string, unknown>; proof: string }> {
+  const proof = verdict === "confirm" ? await hmacB64(signer.macKey, ["miblo-confirm-code-v7", room, signer.phone, c.id, c.nonce, code].join("|")) : "";
+  const fields = { phone: signer.phone, id: c.id, cap: c.cap, nonce, ts: now };
+  const mac = await hmacB64(signer.macKey, ["miblo-confirm-v7", room, signer.phone, c.id, c.cap, verdict, nonce, String(now), proof].join("|"));
+  return { payload: { v: 7, kind: verdict === "confirm" ? "confirm_answer" : "confirm_deny", ...fields, ...(verdict === "confirm" ? { proof } : {}), mac }, proof };
+}

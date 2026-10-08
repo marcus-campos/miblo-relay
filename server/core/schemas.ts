@@ -55,17 +55,33 @@ export const phoneRegisterSchema = z.object({
   pub: z.string().regex(/^[A-Za-z0-9_-]{87}$/),
   att: b64(16, 5500).optional(),
   cdj: b64(16, 2800).optional(),
+  // v7: the passkey this phone already has, proven by an assertion over this identity.
+  pk: z.object({ id: b64(2, 1400), x: b64(43, 43), y: b64(43, 43) }).strict().optional(),
+  pkwa: z.object({ cred: b64(2, 1400), ad: b64(16, 1400), cdj: b64(16, 2800), sig: b64(8, 120) }).strict().optional(),
 });
 export const phoneRevokeSchema = z.object({ id: z.string().regex(/^[A-Za-z0-9_-]{22}$/) });
 // A computer's identity key (ECDSA P-256, raw uncompressed: 87 base64url characters, 0x04 first).
 const cpubSchema = b64(87, 87).regex(/^B/);
+// v7: the computer's public share of one attempt of the code exchange (never the code).
+const pakeRound = z.object({ n: z.number().int().min(1).max(1000), rs: b64(22, 22), ya: b64(43, 43), wrong: z.number().int().min(0).max(10) }).strict();
 export const phoneRequestSchema = z.object({
-  state: z.enum(["pending", "denied", "expired"]),
+  // "confirm" (v7): the phone typed the code; a phone the computer already has must confirm it.
+  state: z.enum(["pending", "confirm", "denied", "expired"]),
   expiresAt: z.string().max(40).nullable().optional(),
   commit: b64(43, 43).optional(),
   cpub: cpubSchema.optional(),
   nonce: b64(43, 43).nullable().optional(),
+  pake: pakeRound.optional(),
 });
+// v7: the phone's answer to one attempt (the person typed the computer's code on the phone).
+export const phonePakeSchema = z.object({
+  device: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+  n: z.number().int().min(1).max(1000),
+  ya: b64(43, 43),
+  yb: b64(43, 43),
+  tag: b64(43, 43),
+  wa: z.object({ cred: b64(2, 1400), ad: b64(16, 1400), cdj: b64(16, 2800), sig: b64(8, 120) }).strict().optional(),
+}).strict();
 export const grantSchema = z.object({
   room: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
   epoch: z.number().int().min(0).max(1_000_000),

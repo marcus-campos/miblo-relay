@@ -6,10 +6,18 @@ read "your server". What differs on a self-hosted server is in "Self-hosted serv
 in docs/threat-model.md.
 -->
 
-# Miblo phone relay protocol (v6)
+# Miblo phone relay protocol (v7)
 
 Miblo is local-first. The phone companion is OPT-IN and END-TO-END ENCRYPTED: the relay on
 miblo.ai only forwards opaque ciphertext and never sees keys or plaintext.
+
+v7 (Miblo 1.23, see "v7" below): the computer shows a 6-digit code and the phone types it, both
+to let a new phone in (a password-authenticated key exchange over the code) and to confirm on a
+phone the person already has any change that widens what phones can do (approvals, replies,
+history, tasks, folders, a longer timeout or task limit), with that phone's passkey. It replaces
+the 4-digit gadget code (`miblo plus confirm <code>`) and typing the phone's code on the computer
+(`miblo phone approve --code`); the v6 sections below describing those are history where they
+say so.
 
 v6 (see "v6" below): phones join through the person's miblo.ai account instead of a QR code or
 link (the computer and the phone are both signed in to the same account; the computer seals the
@@ -63,8 +71,8 @@ accept them.)
 - Pairing is done only by the person at the computer: `miblo phone on|link` from a terminal or
   the Miblo desktop app, never under an AI agent (environment markers such as `CLAUDECODE`, or an
   agent process among its ancestors). A phone paired that way sees the status only; letting it
-  approve and reply (its enrollment window) needs the 4-digit code a paired Miblo shows on its
-  screen. The `/miblo:phone` slash command is user-only and hands the command to the user instead
+  approve and reply (its enrollment window) needed the 4-digit code a paired Miblo shows on its
+  screen (history: v7 confirms on the phone, "v7: confirmations on the phone"). The `/miblo:phone` slash command is user-only and hands the command to the user instead
   of running it. Details in "Physical presence (the local gate)" below.
 - The QR code (`phone-qr.svg`, 0600) is deleted as soon as one more phone connects and at the
   latest 10 minutes after it was made; each `on|link` opens a pairing window of 10 minutes for one
@@ -347,7 +355,7 @@ keys:
 - `approval`: `{v, kind:"approval", at, id, session, tool, input, full, hash, nonce, expires}`.
   `id`, `nonce`: 128-bit random (22 base64url). `input`: the tool input as canonical JSON (keys
   sorted at every level), whole when `full` (≤ 30 KiB), else only its start. `hash` =
-  base64url(SHA-256(canonical input)). `expires` ≤ `at` + 2 min. `approval_done`:
+  base64url(SHA-256(canonical input)). `expires` ≤ `at` + 1 h (the computer's "how long a prompt waits" setting, 15 s to 1 h). `approval_done`:
   `{v, kind, at, id, outcome}` with `allow`, `deny`, `timeout` or `answered`.
 - `decision`: `{v, kind:"decision", phone, id, session, tool, hash, decision:"allow"|"deny", nonce,
   ts, mac, wa?}` with `mac` = base64url(HMAC-SHA256(phone's macKey, `"miblo-decision-v4|" + room +
@@ -384,9 +392,10 @@ keys:
    (id and name), outcome, why, and a short summary made on the computer (the first 200
    characters of the command or the file path, hidden characters spelled out). `miblo plus audit`
    shows it.
-6. Turning approvals (or replies, or history) on and changing the timeout need the 4-digit code a
-   paired Miblo shows on its screen, typed into the terminal or the desktop app; never under an AI
-   agent ("Physical presence" below).
+6. Turning approvals (or replies, or history) on and changing the timeout (15 s to 1 h) are
+   confirmed on a phone the computer already has, with the code the computer shows and that
+   phone's passkey ("v7: confirmations on the phone"); never under an AI agent. Before 1.23: the
+   4-digit gadget code ("Physical presence" below).
 
 ### Replies (Claude Code, beta)
 Claude Code's documented way to add input to a running session is a channel (MCP server with the
@@ -417,6 +426,9 @@ and another local user takes the port, its "allow" (or a reply for the channel s
 The data folder is 0700 and every file in it 0600 (tightened when the bridge starts).
 
 ### Physical presence (the local gate)
+History (v6 and before): from 1.23 the trust root for widening is a confirmation on the person's
+phone ("v7: confirmations on the phone"); the agent checks below remain as friction, and the
+gadget's Plus code is no longer asked by the CLI or the desktop app.
 Everything that lets a phone act on the computer (turning Miblo+ approvals, replies, replies into
 permissive sessions or history on, changing the approval timeout, enrolling a phone's approval
 identity) needs the person AT THE DESK, proven by the gadget:
@@ -498,7 +510,8 @@ gadget code is never asked to add a phone.
    code exchange below) so the phone shows "Aguardando confirmação no computador" with the
    computer's name, the time left and, a few seconds later, the 6-digit code to type there. A
    request waits 15 minutes:
-   - **Permitir** in the desktop app, or `miblo phone approve <id> --code <code>` in the person's
+   - (v6; from 1.23 see "v7: a new phone types the computer's code")
+     **Permitir** in the desktop app, or `miblo phone approve <id> --code <code>` in the person's
      own terminal (which asks for the code on the controlling terminal when it is not given),
      typing the code the waiting phone shows (below, "Verifying a new phone"). A code that does
      not match turns the phone away at once (`code_mismatch`: one try per request; the phone asks
@@ -525,7 +538,7 @@ gadget code is never asked to add a phone.
    allowed, never to what the account shows now. Phones migrating from v5 (below) come back
    through the same confirmation.
 
-   Contract for the desktop app: `miblo phone pending --json` -> `[{id, short, name, model,
+   Contract for the desktop app (v6; the v7 contract is in "v7" below): `miblo phone pending --json` -> `[{id, short, name, model,
    place, passkey, joinedAt, seenAt, expiresAt, codeReady}]` (times in ms; only requests still
    waiting; `codeReady`: the phone shows its code now, so Permitir can ask for it);
    `miblo phone approve <id> --code <6 digits> --json` (`--code=<6 digits>` too; spaces and `-`
@@ -610,6 +623,9 @@ at once) without every linked computer reading the account all the time:
   plugin's own reaction and 100 ms round trips (its `test/phone-push.test.js`), about 2.1 s.
 
 #### Verifying a new phone (the code) and signed grants
+(The commit-reveal code below is v6, kept for history: v7 replaces it with the PAKE in "v7: a new
+phone types the computer's code". Signed grants, the computer's identity and pairings bound to the
+account are unchanged.)
 
 Security audit 1.21.0, findings 1 and 2: the account lists the phone's `pub`, and the server
 could have listed its own key instead (every grant would then be sealed to the server), or sealed
@@ -844,7 +860,106 @@ the firmware's renderer (WebAssembly), in the mood its screen shows:
    `miblo_pet_render(mood, frame, look…)` at the file's own speed; anything refused, or a pet not
    received yet, shows the resting eyes.
 
-## Threat model (v6)
+## v7
+
+### v7: a new phone types the computer's code
+
+Why it changed: in v6 the phone showed the code and the person typed it on the computer. Turned
+around naively (the computer shows SAS(N, P)) whoever relays could play the phone towards the
+computer: it sees both nonces, so it knows the code. v7 uses a password-authenticated key exchange
+(CPace-style over X25519) with the code as the password. Implementations: plugin
+`lib/plus/pake.js`, web `src/lib/pake.ts`; shared vector `plus-v7-vector.json` (plugin and web,
+identical).
+
+- `CI` = phone | pub | cpub; `sid` = `"miblo-pake-v7|" + phone + "|" + pub + "|" + cpub + "|" + n +
+  "|" + rs` (`n` the attempt, `rs` 16 random bytes of the computer for it).
+- `G` = Elligator2(SHA-512(lv("miblo-cpace-g-v7") lv(code) lv(sid))[0..32], bit 255 cleared);
+  computer `Ya = X25519(a, G)`, phone `Yb = X25519(b, G)`, `K = X25519(a, Yb) = X25519(b, Ya)`;
+  `ISK = SHA-256(lv("miblo-cpace-isk-v7") lv(sid) lv(K) lv(Ya) lv(Yb))`; the phone's proof `tag =
+  HMAC(ISK, "miblo-pake-phone-v7")`; the computer's `conf = HMAC(ISK, "miblo-pake-computer-v7")`.
+1. A phone of the account appears (as in v6): the computer queues it (`phones-pending.json`), makes
+   a random 6-digit code (shown only on the computer: `miblo phone pending`, the desktop app, the
+   notification) and sends its share: `PUT /api/plus/phones/<id>/request {state:"pending",
+   expiresAt, cpub, pake:{n, rs, ya, wrong}}` (never the code).
+2. The person types the code on the phone. The phone computes `Yb`, `tag` and a passkey assertion
+   (UV) over SHA-256(`"miblo-pake-wa-v7|" + phone + "|" + pub + "|" + cpub + "|" + ya + "|" + yb + "|"
+   + tag`) and answers once per attempt: `POST /api/phones/<id>/pake {device, n, ya, yb, tag, wa?}`
+   (session, CSRF, second factor; another answer for the same attempt: `409 already_answered`).
+   The server stores it (`phone_requests.pake_answer`, migration 0033) and nudges the computer.
+3. The computer checks `tag` with its own `a` and code, the keys it saw (`pub`, `cpub`), the
+   passkey the phone registered with (rp, origin, UP, UV, counter). Wrong: a new attempt (`n+1`,
+   new `rs`, `wrong+1`); **3 wrong answers deny the request**. Right: the phone is admitted with
+   exactly that id, `pub` and passkey; `conf` travels inside the first grant (signed, as in v6),
+   and the phone pins the `cpub` whose grant carries the `conf` of its own exchange (no "Sim, fui
+   eu" step needed). On a Miblo+ computer that already has a phone with a passkey the request is
+   `held` (account state `confirm`) until one of those phones confirms it (below, `what.kind:
+   "admit"`).
+4. **One passkey per phone.** A phone that already has a Miblo passkey re-uses it (after asking
+   once): the new identity lists its public key (`account_phones.pk {id, x, y}`) with an assertion
+   over the identity (`pkwa`) instead of a registration (`att`, `cdj`). `GET /api/phones` lists the
+   account's passkey public keys so the app can tell.
+- Desktop contract: `miblo phone pending --json` -> `[{id, short, name, model, place, passkey,
+  joinedAt, seenAt, expiresAt, code, held, wrong, left}]` (`code`: the 6 digits the person types
+  on that phone; `held`: typed right, waiting for a confirmation on another phone). `miblo phone
+  deny <id> --json` as in v6; `miblo phone approve` answers exit 2 `{ok:false,
+  error:"phone_types_code"}`.
+
+### v7: confirmations on the phone
+
+Everything that widens what a phone can do on the computer (approvals, replies, replies into
+permissive sessions, history, new tasks, a task folder, a longer approval timeout or task limit)
+and a second phone on a Miblo+ computer are confirmed on a phone that computer already has
+(plugin `lib/plus/confirm.js`). Turning anything off never asks.
+1. The bridge makes one request: 128-bit `id`, `nonce`, a random 6-digit code (shown only on the
+   computer), `what` (plain data: `{kind:"settings", on:[…], timeoutS, taskMaxMin, folders:[…]}` or
+   `{kind:"admit", phone:{id, name, model, place}}`) and `cap` = SHA-256(canonical JSON of `what`),
+   for 2 minutes. One at a time (`busy`), at most 6 an hour (`rate_limited`); none without a phone
+   with a passkey (`no_phone`).
+2. It is sealed to every phone with a passkey (the `approval` channel, each under its own key),
+   re-sent when a phone connects and every 10 s while it waits; the relay keeps nothing.
+3. The phone renders `what` in its own words; the person types the code and confirms with the
+   passkey. Desktop browsers cannot approve ("Confirme pelo celular"). Answer `{v:7,
+   kind:"confirm_answer", phone, id, cap, nonce, ts, proof, mac, wa}`: `proof = HMAC(macKey,
+   "miblo-confirm-code-v7|room|phone|id|request nonce|code")`, `mac = HMAC(macKey,
+   "miblo-confirm-v7|room|phone|id|cap|verdict|nonce|ts|proof")`, `wa` = passkey assertion (UV)
+   over SHA-256(`"miblo-confirm-wa-v7|room|phone|id|cap|request nonce|proof"`). The code never
+   travels. `confirm_deny` (MAC only) cancels.
+4. The computer checks, in order: a phone with a passkey (relay-authenticated, its key opened the
+   frame), the pending request (id, not expired), the same `cap`, the MAC, a fresh nonce, the clock
+   (2 min), the proof against its own code (**3 wrong codes cancel the request**), then the passkey
+   (rp, origin, UP, UV, counter). Only then is the change applied (`plus.json` signed) or the phone
+   admitted, and the phones are told the outcome.
+- Desktop and CLI contract: a widening command with `--json` answers at once `{confirm:{id,
+  state:"waiting", code, expiresAt, what, left, phones}}` (exit 0) or `{confirm:null, error}`
+  (exit 3: `no_phone` | `not_active` | `not_linked` | `off` | `busy` | `rate_limited` |
+  `bridge`); `miblo plus confirm status [--wait <s>] --json` -> `{confirm}` (state `waiting` |
+  `applied` | `wrong_code` | `cancelled` | `denied` | `expired` | `failed`, the code only while
+  waiting; with `status` once settled); `miblo plus confirm cancel --json`. `miblo plus confirm
+  <4 digits>` is refused (exit 2) with a pointer to the new flow. `plus status --json` and `GET
+  /api/plus/me` carry the account `email` (the desktop app: "Conectado como <email>", Sair =
+  `miblo account unlink`).
+
+### v7: adversarial analysis
+
+| Who | Cannot | Because |
+|---|---|---|
+| The relay, miblo.ai or the network (MITM) | learn either code | only `Ya`, `Yb`, `tag`, HMAC proofs and passkey assertions travel; none reveals the code |
+| same | answer "typed right" for a phone key of its own | the PAKE key matches only with the same code and the same `phone`, `pub`, `cpub`; one online guess per attempt (10^-6), 3 attempts per request, then denied |
+| same | forge or replay a confirmation | per-phone MAC key (never on the server), single-use nonces, 2-minute clock window, `id` and `cap` in the MAC |
+| same | have the person confirm another change | the passkey signs `cap`, the hash of exactly the `what` the computer made; the computer applies only its own request |
+| same | confirm without the person | passkey assertion with user verification (Face ID, Touch ID, fingerprint or PIN) |
+| same | flood or grind | one request at a time, 6 an hour; 3 wrong per request |
+| An AI agent on the computer | confirm | it can start a request and read the code, but cannot type it on the phone nor pass the passkey's UV; the CLI also refuses agents |
+| A desktop browser signed in to the account | approve | the phone app refuses (`phoneOnly`) |
+
+Residual: a compromised miblo.ai serves the phone app, so it could describe a request as something
+other than its `what`; the computer applies only the request it made, which the person (not an
+agent) asked for on that computer and which the computer shows as applied. Someone holding the
+person's unlocked phone and seeing the computer's screen can confirm as the person. A lost phone
+keeps its rights until revoked. Every use of a recovery code, failed attempts at one (at most one
+e-mail an hour) and every new passkey send the account's security notice e-mail.
+
+## Threat model (v6; v7 rows at the end)
 
 Free and Miblo+ are held to the same bar: the phone companion exposes the computer's activity to
 the cloud only as ciphertext, and nothing on the phone or the relay can act on the computer
@@ -863,7 +978,7 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | A network shared by many people (CGNAT, an office) is locked out of new rooms by its neighbours | only rooms a phone joined count over the 30-day period (300 for an IPv4 address); rooms never joined cost a day's slot only and give it back when they go; the day cap and each room's own limits do the rest | web `relay.test.ts` (30 joined rooms on one IPv4, the neighbour pairs the next day; never-joined rooms given back) |
 | A phone reply hides a payload from the gadget or the notification with look-alike blanks or padding | invisible characters removed, look-alike blanks made spaces, runs of 3+ blanks shortened before delivery; the summaries show the true delivered length and flag one that hides part of the text; the audit log keeps it whole | plugin `show-on-computer.test.js` |
 | Relay replays an old decision, reply or history frame | decisions single-use (settled request) with unique nonces and `ts` ±2 min; reply nonces kept 10 min across restarts and anything older than the bridge refused; history newest-wins per session | plugin `plus.test.js`, web `phone-plus.test.ts` |
-| Relay withholds or delays frames | an approval expires (≤ 2 min, phone and computer) and then Claude Code asks locally; never auto-allow | plugin `plus.test.js` |
+| Relay withholds or delays frames | an approval expires (≤ 1 h, the setting; phone and computer alike) and then Claude Code asks locally; never auto-allow | plugin `plus.test.js` |
 | Confused deputy: a decision for one session or command applied to another | MAC and checks bind phone, id, session, tool and input hash; the passkey challenge binds id, tool, hash, room and nonce; replies matched to exactly one tracked session | plugin `plus.test.js`, e2e |
 | Approval spoofing: hidden text in a command (newlines, bidi overrides, zero-width, ESC), stacked combining marks painting over the card, or a misleading AI description | the phone checks the hash of what it received and shows every character (escapes for invisible ones and for marks past two per character, deny-only when present), every box clips its own ink, the command first and whole, counts and non-ASCII warnings on every field, the description labelled as AI text and secondary, Approve only after the end was on screen | web `phone-plus.test.ts`, e2e (bidi and stacked marks deny-only, card clipped, file path and diff) |
 | Prompt injection via message text shown on the phone | history cleaned of controls, bidi and zero-width characters and rendered as React text only; labelled as AI text | web `phone-plus.test.ts`, e2e (`<img onerror>` stays text) |
@@ -899,6 +1014,9 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | Secrets in the conversation reach the phone (v6 history carries commands, outputs and diffs) | redaction (above) of whole texts after invisible characters are stripped: key blocks, known token shapes, auth and cookie headers, quoted and unquoted values of secret-named keys in env, JSON, YAML, code and flags, CLI password flags, URL credentials, long high-entropy strings; also the snapshot's tool detail and the task audit log; outputs are short tails of commands only; thinking and subagents never. Residual: a secret with no recognisable name, shape or entropy (a short dictionary word as a password in prose) | plugin `redact.test.js`, `redact-audit.test.js` (the audit corpus, a corpus of ordinary code that must pass unchanged), `history.test.js` |
 | Markdown in an AI message injects markup, loads a tracking image or hides a phishing link (v6) | React-only renderer, no HTML; images never loaded; links only http(s), shown with their domain and opened after a tap that shows the whole address | web `chat-markdown.test.tsx`, e2e (`<img onerror>` and `![x](https://…)` stay text) |
 | Secrets in logs | the plugin never logs tokens, keys or message text; the audit log keeps hashes, a short summary and phone ids | plugin `plus.test.js` |
+| (v7) The server (or a MITM) plays the new phone towards the computer, knowing everything that travels | the computer shows the code and the phone types it into a CPace-style PAKE bound to both public keys and the attempt: nothing relayed reveals the code; one online guess per attempt (10^-6), 3 attempts, then denied; the computer's `conf` in the first grant pins it on the phone | plugin `phone-trust.test.js`, `account-phones.test.js` (shared `plus-v7-vector.json`), relay `test/pake.test.ts`, `test/api.test.ts`, `test/e2e/plugin.test.ts` |
+| (v7) An AI agent turns approvals, replies, history or tasks on, adds a folder or a second phone | the change waits for a confirmation on a phone the computer already has: the code shown on the computer typed there, a proof under that phone's MAC key, the passkey with UV over `cap`; 3 wrong cancel, 6 requests an hour, one at a time; desktop browsers refused | plugin `plus.test.js`, `phone.test.js` |
+| (v7) Account takeover (recovery code or a passkey of the attacker's) | on miblo.ai every use of a recovery code, failed attempts (at most hourly) and every new passkey send the security notice e-mail; a self-hosted server has no e-mail and logs these events (`account_security`) instead; either way a new phone still gets nothing without the code shown on the computer | relay `test/api.test.ts` (the code path) |
 
 ## Self-hosted servers
 
@@ -926,5 +1044,9 @@ plugin and the phone app need nothing but a different origin:
 - **No plans.** Every room a linked computer registers gets the `plus` plan with no end
   (`valid_until: null`), so history, replies, approvals and remote tasks work without a license.
   Rooms no computer registered keep the free-room limits above.
+- **No e-mail.** The account has a username, not an e-mail: `/api/plus/me` and the device token
+  answer `email: null` (the desktop app then shows no "Conectado como"), and the security notices
+  miblo.ai e-mails (a recovery code used, failed recovery-code attempts, a new passkey or phone)
+  are written to the server's log as `{"event":"account_security"}` lines instead.
 - **Push.** Alerts are signed with the operator's own VAPID keys (`GET /api/relay/vapid`); the
   subject is `RELAY_VAPID_SUBJECT` or the server's origin.

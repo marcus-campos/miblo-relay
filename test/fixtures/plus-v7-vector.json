@@ -1,0 +1,46 @@
+{
+  "pake": {
+    "phone": "AAAAAAAAAAAAAAAAAAAAAA",
+    "pub": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "cpub": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    "n": 1,
+    "rs": "RRRRRRRRRRRRRRRRRRRRRR",
+    "code": "048213",
+    "sid": "miblo-pake-v7|AAAAAAAAAAAAAAAAAAAAAA|BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB|CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC|1|RRRRRRRRRRRRRRRRRRRRRR",
+    "generator": "YbiaApgg_TlpPgeWXl1odKCI6Bz_SY5ojvVIUlAe92o",
+    "a": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "ya": "7c2lSqywzWDUsIGAXuw69u-gbuXHIeXpW0h5xNc-g3o",
+    "b": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+    "yb": "_dOQNJjLnZ8Rq7Kqh_X242_lr1ZsryTG_L51bQc_jjQ",
+    "isk": "bhUQxkYOCZfy5uqKLjQKdQSN5c-YoiCQeJTBaP9WX4U",
+    "tag": "nbOiHngbmU2HMbBDVJEvVOnIpjRnXPYr38wU4d1lMio",
+    "conf": "CPDu-RtFeSkmBPVIv-IGtkXMlykeI7GrZ4HcXCXU9pA",
+    "challenge": "CwTn5U1MHA65gucJ-UNlVJHvPWq1Y55m-Kw2K0DNwqw"
+  },
+  "confirm": {
+    "room": "ROOMROOMROOMROOMROOMRO",
+    "phone": "PPPPPPPPPPPPPPPPPPPPPP",
+    "macKey": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "what": {
+      "kind": "settings",
+      "on": [
+        "approvals",
+        "tasks"
+      ],
+      "timeoutS": null,
+      "taskMaxMin": null,
+      "folders": [
+        "/Users/ana/code"
+      ]
+    },
+    "cap": "KVMZqN2BA8asAMYVHClYTEX3adM2_Hp9By_4lEQVBJY",
+    "id": "IIIIIIIIIIIIIIIIIIIIII",
+    "reqNonce": "NNNNNNNNNNNNNNNNNNNNNN",
+    "code": "482913",
+    "nonce": "QQQQQQQQQQQQQQQQQQQQQQ",
+    "ts": 1790000000000,
+    "proof": "e0TWBDrXTL9t9ZrEwhu3NXcTlndauBBdFteaBvZNX-w",
+    "mac": "c5UiAsmiUJU3IZDFPXRUznSDaiEcvTioVCLm4swLIoQ",
+    "challenge": "jDo-XM4gWLsz_zFi1qnXnz3D47nbpY7IOc24balhXXo"
+  }
+}

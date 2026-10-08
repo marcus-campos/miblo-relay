@@ -7,17 +7,24 @@
 // link, a QR code or the server in the clear.
 import { call } from "@/components/community/security";
 import { b64url, computerFingerprint, openGrant, phoneRegChallenge, randomNonce, sasCode, sasCommit, verifyGrantSig, type Grant } from "@/lib/relay-crypto";
-import { createPhonePasskey, rpIdFor } from "@/lib/webauthn";
-import { listPairings, saveIdentity, savePairingFromGrant, type AccountIdentity, type Pin, type SasRound, type StoredPairing } from "./store";
+import { assertAnyPhonePasskey, assertPhonePasskey, createPhonePasskey, rpIdFor, type Assertion } from "@/lib/webauthn";
+import { confOf, pakeChallenge, phoneAnswer, phoneReuseChallenge, sidOf } from "@/lib/pake";
+import { listPairings, saveIdentity, savePairingFromGrant, type AccountIdentity, type PakeRun, type Pin, type SasRound, type StoredPairing } from "./store";
 
 export type { Pin, SasRound };
-export type AccountPhones = { uid: string; phones: { id: string; name: string; passkey: boolean; created_at: string }[] };
+/** `pk` (v7): a phone's passkey public key, so a new identity of this phone can re-use it. */
+export type PhonePk = { id: string; x: string; y: string };
+export type AccountPhones = { uid: string; phones: { id: string; name: string; passkey: boolean; created_at: string }[]; passkeys?: PhonePk[] };
+/** v7: the computer's share of the current attempt of its code exchange. */
+export type PakeRound = { n: number; rs: string; ya: string; wrong: number };
 export type GrantRow = Grant & { device: { id: string; name: string }; at: string; cpub?: string | null; sig?: string | null };
 export type RequestRow = {
   device: { id: string; name: string };
-  state: "pending" | "denied" | "expired";
+  state: "pending" | "confirm" | "denied" | "expired";
   expires_at: string | null;
   at: string;
+  /** v7: the computer shows the code; this phone answers this attempt with what the person types. */
+  pake?: PakeRound | null;
   /** The round of the code exchange (protocol v6 "Verifying a new phone"). */
   commit?: string | null;
   cpub?: string | null;
@@ -56,8 +63,20 @@ export async function fetchGrants(phone: string, wait: string | null = null, sig
 }
 
 /** What this phone shows while no computer let it in yet: the most hopeful computer's answer. */
-export type Waiting = { kind: "pending"; device: string; expiresAt: number } | { kind: "expired"; device: string } | { kind: "denied"; device: string } | null;
+export type Waiting =
+  | { kind: "pending"; device: string; expiresAt: number }
+  | { kind: "code"; device: string; deviceId: string; expiresAt: number; left: number; wrong: number }
+  | { kind: "confirm"; device: string; expiresAt: number }
+  | { kind: "expired"; device: string }
+  | { kind: "denied"; device: string }
+  | null;
 export function waitingFor(requests: RequestRow[], now: number): Waiting {
+  // v7: a computer showing its code (the person types it here), or holding this phone until a
+  // phone it already has confirms it.
+  const typed = requests.find((r) => r.state === "pending" && r.pake && Date.parse(r.expires_at ?? "") > now);
+  if (typed?.pake) return { kind: "code", device: typed.device.name, deviceId: typed.device.id, expiresAt: Date.parse(typed.expires_at!), left: Math.max(0, 3 - typed.pake.wrong), wrong: typed.pake.wrong };
+  const held = requests.find((r) => r.state === "confirm" && Date.parse(r.expires_at ?? "") > now);
+  if (held) return { kind: "confirm", device: held.device.name, expiresAt: Date.parse(held.expires_at!) };
   const pending = requests
     .map((r) => ({ r, until: r.state === "pending" ? Date.parse(r.expires_at ?? "") : NaN }))
     .filter((x) => Number.isFinite(x.until) && x.until > now)
@@ -91,28 +110,46 @@ export function deviceName(ua: string): string {
  * a random id, and (`passkeys`) a passkey created over the v6 registration challenge.
  * -> the identity (not registered yet) and the registration to send.
  */
-export async function makeIdentity(uid: string, name: string, passkeys: boolean): Promise<{ identity: AccountIdentity; att?: string; cdj?: string }> {
+export async function makeIdentity(uid: string, name: string, passkeys: boolean, known: PhonePk[] = []): Promise<{ identity: AccountIdentity; att?: string; cdj?: string; pk?: PhonePk; pkwa?: Assertion }> {
   const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"])) as CryptoKeyPair;
   const pub = b64url(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
   const id = randomNonce(16);
-  let credId: string | null = null;
-  let att: string | undefined;
-  let cdj: string | undefined;
-  if (passkeys) {
-    const made = await createPhonePasskey({ rpId: rpIdFor(location.hostname), challenge: await phoneRegChallenge(id, pub), phoneId: id, computer: name });
-    credId = made.credId;
-    att = made.att;
-    cdj = made.cdj;
+  const base = { uid, id, name, priv: pair.privateKey, pub, at: Date.now(), registered: false, pins: [], rounds: [] };
+  if (!passkeys) return { identity: { ...base, credId: null } };
+  // v7: one passkey per phone. A passkey of this account that this device holds (the account
+  // lists their public keys) is proven with an assertion over this new identity; only when none
+  // answers is a new one made.
+  const ids = known.map((k) => k.id).slice(0, 16);
+  if (ids.length) {
+    try {
+      const wa = await assertAnyPhonePasskey({ rpId: rpIdFor(location.hostname), credIds: ids, challenge: await phoneReuseChallenge(id, pub) });
+      const pk = known.find((k) => k.id === wa.cred);
+      if (pk) return { identity: { ...base, credId: pk.id }, pk, pkwa: wa };
+    } catch {
+      // None of them on this device (or the person cancelled): a new passkey below.
+    }
   }
-  return { identity: { uid, id, name, priv: pair.privateKey, pub, credId, at: Date.now(), registered: false, pins: [], rounds: [] }, att, cdj };
+  const made = await createPhonePasskey({ rpId: rpIdFor(location.hostname), challenge: await phoneRegChallenge(id, pub), phoneId: id, computer: "" });
+  return { identity: { ...base, credId: made.credId }, att: made.att, cdj: made.cdj };
+}
+
+/**
+ * v7: what joining does with passkeys. None of the account's on this device's list: make one (no
+ * question). Some: ask once ("Usar a mesma?") unless the person already chose to re-use (remembered);
+ * then re-use. A person who asks for another gets a new one.
+ */
+export function passkeyPlan(known: number, remembered: boolean, choice: "reuse" | "create" | null): "ask" | "reuse" | "create" {
+  if (choice) return choice;
+  if (!known) return "create";
+  return remembered ? "reuse" : "ask";
 }
 
 export type RegisterResult = "ok" | "mfa" | "mfa_setup" | "limit" | "error";
 
 /** Registers the identity with the account (needs the second factor passed in the last 5 minutes). */
-export async function registerIdentity(csrf: string, made: { identity: AccountIdentity; att?: string; cdj?: string }): Promise<RegisterResult> {
+export async function registerIdentity(csrf: string, made: { identity: AccountIdentity; att?: string; cdj?: string; pk?: PhonePk; pkwa?: Assertion }): Promise<RegisterResult> {
   const { identity: me } = made;
-  const r = await call("/api/phones", { id: me.id, name: me.name, pub: me.pub, ...(made.att && made.cdj ? { att: made.att, cdj: made.cdj } : {}) }, csrf);
+  const r = await call("/api/phones", { id: me.id, name: me.name, pub: me.pub, ...(made.att && made.cdj ? { att: made.att, cdj: made.cdj } : {}), ...(made.pk && made.pkwa ? { pk: made.pk, pkwa: made.pkwa } : {}) }, csrf);
   if (r.status === 200) {
     await saveIdentity({ ...me, registered: true });
     return "ok";
@@ -211,6 +248,56 @@ export async function grantVerdict(phone: string, pins: Pin[], rounds: SasRound[
   return "bad";
 }
 
+// --- v7: the computer shows the code, this phone types it ------------------------------------------
+
+/** A v7 run is kept this long for its computer's first grant (a request waits 15 minutes). */
+const PAKE_KEPT_MS = 30 * 60_000;
+export type PakeSend = "ok" | "cancelled" | "error" | "gone";
+
+/**
+ * The person typed `code` (shown on the computer of request `q`): this phone's answer to that
+ * attempt, with its passkey over it (user verification) when it has one, sent through the account.
+ * The key of the run is kept (the computer's confirmation in its first grant pins it).
+ */
+export async function answerCode(csrf: string, me: AccountIdentity, q: RequestRow, code: string, deps: { post?: typeof call; assert?: typeof assertPhonePasskey } = {}): Promise<{ result: PakeSend; me: AccountIdentity }> {
+  const post = deps.post ?? call;
+  const assert = deps.assert ?? assertPhonePasskey;
+  if (!q.pake || !q.cpub || !/^\d{6}$/.test(code)) return { result: "error", me };
+  const sid = sidOf({ phone: me.id, pub: me.pub, cpub: q.cpub, n: q.pake.n, rs: q.pake.rs });
+  const ans = await phoneAnswer(code, sid, q.pake.ya);
+  let wa: Assertion | undefined;
+  if (me.credId) {
+    try {
+      wa = await assert({ rpId: rpIdFor(location.hostname), credId: me.credId, challenge: await pakeChallenge({ phone: me.id, pub: me.pub, cpub: q.cpub, ya: q.pake.ya, yb: ans.yb, tag: ans.tag }) });
+    } catch {
+      return { result: "cancelled", me };
+    }
+  }
+  const run: PakeRun = { device: q.device.id, cpub: q.cpub, isk: ans.isk, at: Date.now() };
+  const next = { ...me, pakes: [...(me.pakes ?? []).filter((x) => Date.now() - x.at < PAKE_KEPT_MS && x.cpub !== q.cpub), run].slice(-8) };
+  await saveIdentity(next);
+  const r = await post(`/api/phones/${me.id}/pake`, { device: q.device.id, n: q.pake.n, ya: q.pake.ya, yb: ans.yb, tag: ans.tag, ...(wa ? { wa } : {}) }, csrf);
+  return { result: r.status === 200 ? "ok" : r.status === 404 || r.status === 409 ? "gone" : "error", me: next };
+}
+
+/**
+ * A grant from a computer this phone has not pinned yet: pinned when its sealed payload carries the
+ * confirmation of a code exchange this phone ran with that very key (v7). -> the identity, pinned,
+ * or null.
+ */
+export async function pinByCode(me: AccountIdentity, g: GrantRow, payload: { conf?: unknown }, now = Date.now()): Promise<AccountIdentity | null> {
+  if (typeof g.cpub !== "string" || typeof payload.conf !== "string") return null;
+  for (const r of me.pakes ?? []) {
+    if (r.cpub !== g.cpub || now - r.at > PAKE_KEPT_MS) continue;
+    if ((await confOf(r.isk)) !== payload.conf) continue;
+    const pins = [...(me.pins ?? []).filter((p) => p.cpub !== g.cpub), { cpub: g.cpub, device: g.device.id, name: g.device.name.slice(0, 40), at: now }];
+    const next = { ...me, pins, pakes: (me.pakes ?? []).filter((x) => x !== r) };
+    await saveIdentity(next);
+    return next;
+  }
+  return null;
+}
+
 /** The pairings the signed-in account (`uid`; null: signed out) may use, and whether others are here. */
 export function pairingsFor(all: StoredPairing[], uid: string | null): { keep: StoredPairing[]; wipe: boolean } {
   if (!uid) return { keep: [], wipe: false };
@@ -248,6 +335,13 @@ export async function syncGrants(me: AccountIdentity, grants: GrantRow[]): Promi
   const confirm: ShownCode[] = [];
   for (const g of grants.slice(0, 16)) {
     try {
+      // v7: a computer this phone typed the code of: its grant's confirmation pins it.
+      if (typeof g.cpub === "string" && typeof g.sig === "string" && !(me.pins ?? []).some((p) => p.cpub === g.cpub) && (me.pakes ?? []).some((r) => r.cpub === g.cpub)
+        && (await verifyGrantSig(me.id, { ...g, cpub: g.cpub, sig: g.sig }))) {
+        const payload = await openGrant(me.priv, me.id, g);
+        const pinned = await pinByCode(me, g, payload as { conf?: unknown });
+        if (pinned) me = pinned;
+      }
       const verdict = await grantVerdict(me.id, me.pins ?? [], me.rounds ?? [], g);
       if (verdict === "confirm") {
         const r = (me.rounds ?? []).find((x) => x.cpub === g.cpub && x.code && !x.denied)!;

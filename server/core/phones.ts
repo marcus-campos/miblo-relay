@@ -4,6 +4,7 @@
 // needs the account's second factor passed in the last 5 minutes (the route checks it).
 // Same code as miblo.ai's phone registry.
 import { nowIso } from "./crypto";
+import { attestedKey } from "../../app/src/lib/webauthn";
 import type { RequestScope } from "./env";
 import type { LinkedDevice } from "./devices";
 
@@ -13,7 +14,9 @@ export const REVOKED_LISTED_DAYS = 90;
 export const PHONE_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const B64 = /^[A-Za-z0-9_-]+$/;
 
-export type PhoneInput = { id: string; name: string; pub: string; att?: string; cdj?: string };
+export type Pk = { id: string; x: string; y: string };
+export type Wa = { cred: string; ad: string; cdj: string; sig: string };
+export type PhoneInput = { id: string; name: string; pub: string; att?: string; cdj?: string; pk?: Pk; pkwa?: Wa };
 /** What the computers show the person about a new phone (approximate, never used for a decision). */
 export type PhoneMeta = { model: string | null; place: string | null };
 export type PhoneRow = {
@@ -28,8 +31,12 @@ export type PhoneRow = {
   created_at: string;
   asked_at: string | null;
   revoked_at: string | null;
+  pk?: string | null;
+  pkwa?: string | null;
 };
-export type RequestState = "pending" | "denied" | "expired";
+export type RequestState = "pending" | "confirm" | "denied" | "expired";
+export type PakeRound = { n: number; rs: string; ya: string; wrong: number };
+export type PakeAnswer = { n: number; ya: string; yb: string; tag: string; wa?: Wa };
 export type GrantInput = { room: string; epoch: number; epk: string; iv: string; ct: string; cpub: string; sig: string };
 
 /** The raw uncompressed P-256 point a phone's ECDH public key must be (65 bytes, 0x04 first). */
@@ -63,17 +70,18 @@ const placeText = (place: string | null) => (place ? place.split("|").filter(Boo
 /** A phone joins the account (the caller checked the session and its fresh second factor). */
 export async function registerPhone(scope: RequestScope, userId: string, input: PhoneInput, now = Date.now(), meta: PhoneMeta = { model: null, place: null }): Promise<RegisterPhoneResult> {
   if (!PHONE_ID_RE.test(input.id) || !validPub(input.pub)) return { ok: false, error: "invalid_request" };
-  if (!!input.att !== !!input.cdj) return { ok: false, error: "invalid_request" };
+  if (!!input.att !== !!input.cdj || !!input.pk !== !!input.pkwa || (input.att && input.pk)) return { ok: false, error: "invalid_request" };
   const ts = new Date(now).toISOString();
   // One statement: the limit is checked and the row inserted together (parallel registrations
   // cannot all pass a count read before any of them was written).
   try {
     const r = await scope.env.DB.prepare(
-      `INSERT INTO account_phones (id, user_id, name, pub, att, cdj, model, place, created_at)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?9, ?10, ?7
+      `INSERT INTO account_phones (id, user_id, name, pub, att, cdj, model, place, created_at, pk, pkwa)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?9, ?10, ?7, ?11, ?12
         WHERE (SELECT COUNT(*) FROM account_phones WHERE user_id = ?2 AND revoked_at IS NULL) < ?8`,
     )
-      .bind(input.id, userId, input.name, input.pub, input.att ?? null, input.cdj ?? null, ts, MAX_PHONES, meta.model?.slice(0, 60) ?? null, meta.place?.slice(0, 80) ?? null)
+      .bind(input.id, userId, input.name, input.pub, input.att ?? null, input.cdj ?? null, ts, MAX_PHONES, meta.model?.slice(0, 60) ?? null, meta.place?.slice(0, 80) ?? null,
+        input.pk ? JSON.stringify(input.pk) : null, input.pkwa ? JSON.stringify(input.pkwa) : null)
       .run();
     if (!r.meta.changes) return { ok: false, error: "phone_limit" };
   } catch {
@@ -103,7 +111,7 @@ export async function revokePhone(scope: RequestScope, userId: string, id: strin
 /** The account's phones as the account page and the phone app list them (no keys). */
 export async function listPhones(scope: RequestScope, userId: string) {
   const rows = await scope.env.DB.prepare(
-    `SELECT p.id, p.name, p.created_at, p.att IS NOT NULL AS passkey,
+    `SELECT p.id, p.name, p.created_at, (p.att IS NOT NULL OR p.pk IS NOT NULL) AS passkey,
             (SELECT MAX(g.updated_at) FROM phone_grants g WHERE g.phone_id = p.id) AS granted_at,
             (SELECT COUNT(*) FROM phone_grants g WHERE g.phone_id = p.id) AS computers
        FROM account_phones p WHERE p.user_id = ? AND p.revoked_at IS NULL ORDER BY p.created_at`,
@@ -111,6 +119,28 @@ export async function listPhones(scope: RequestScope, userId: string) {
     .bind(userId)
     .all<{ id: string; name: string; created_at: string; passkey: number; granted_at: string | null; computers: number }>();
   return rows.results.map((r) => ({ ...r, passkey: !!r.passkey }));
+}
+
+/**
+ * v7: the public keys of the passkeys this account's phones registered (revoked ones too: the
+ * passkey itself may still be on the device), so a new identity of the same phone can re-use its
+ * passkey instead of making another. Public data; the phone proves it holds one with an assertion.
+ */
+export async function listPasskeys(scope: RequestScope, userId: string): Promise<{ id: string; x: string; y: string }[]> {
+  const rows = await scope.env.DB.prepare(`SELECT att, pk FROM account_phones WHERE user_id = ? AND (att IS NOT NULL OR pk IS NOT NULL) ORDER BY created_at DESC LIMIT 32`)
+    .bind(userId)
+    .all<{ att: string | null; pk: string | null }>();
+  const out = new Map<string, { id: string; x: string; y: string }>();
+  for (const r of rows.results) {
+    let k: { id: string; x: string; y: string } | null = null;
+    if (r.pk) k = parseJson<{ id: string; x: string; y: string }>(r.pk);
+    else if (r.att) {
+      const a = attestedKey(Uint8Array.from(atob(r.att.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((r.att.length + 3) % 4)), (c) => c.charCodeAt(0)));
+      if (a) k = { id: a.credId, x: a.x, y: a.y };
+    }
+    if (k && !out.has(k.id)) out.set(k.id, k);
+  }
+  return [...out.values()].slice(0, 16);
 }
 
 /** One phone's grants (only for its own account, only while it is not revoked). */
@@ -132,13 +162,13 @@ export async function grantsFor(scope: RequestScope, userId: string, phoneId: st
 export async function requestsFor(scope: RequestScope, userId: string, phoneId: string) {
   if (!PHONE_ID_RE.test(phoneId)) return [];
   const rows = await scope.env.DB.prepare(
-    `SELECT q.device_id, d.name AS device_name, q.state, q.expires_at, q.updated_at, q.commit_h, q.cpub, q.cnonce
+    `SELECT q.device_id, d.name AS device_name, q.state, q.expires_at, q.updated_at, q.commit_h, q.cpub, q.cnonce, q.pake
        FROM phone_requests q JOIN plus_devices d ON d.id = q.device_id
        JOIN account_phones p ON p.id = q.phone_id
       WHERE q.phone_id = ? AND p.user_id = ? AND p.revoked_at IS NULL AND d.revoked_at IS NULL AND d.user_id = ? ORDER BY d.created_at`,
   )
     .bind(phoneId, userId, userId)
-    .all<{ device_id: string; device_name: string; state: RequestState; expires_at: string | null; updated_at: string; commit_h: string | null; cpub: string | null; cnonce: string | null }>();
+    .all<{ device_id: string; device_name: string; state: RequestState; expires_at: string | null; updated_at: string; commit_h: string | null; cpub: string | null; cnonce: string | null; pake: string | null }>();
   // The round of the code exchange: the commitment and the computer key, and the computer's nonce
   // once the phone answered (the phone keeps its own nonce; it is not handed back).
   return rows.results.map((r) => ({
@@ -149,6 +179,8 @@ export async function requestsFor(scope: RequestScope, userId: string, phoneId: 
     commit: r.commit_h,
     cpub: r.cpub,
     nonce: r.cnonce,
+    // v7: the computer's share of the current attempt (the phone answers it with the typed code).
+    ...(r.pake ? { pake: parseJson<PakeRound>(r.pake) } : {}),
   }));
 }
 
@@ -165,9 +197,9 @@ export async function askAgain(scope: RequestScope, userId: string, phoneId: str
 export async function phonesForDevice(scope: RequestScope, device: LinkedDevice, now = Date.now()) {
   const phones = await activePhones(scope, device.user_id);
   // This computer's round of the code exchange with each phone: its commitment and the phone's nonce.
-  const rounds = await scope.env.DB.prepare(`SELECT phone_id, commit_h, pnonce FROM phone_requests WHERE device_id = ? AND commit_h IS NOT NULL`)
+  const rounds = await scope.env.DB.prepare(`SELECT phone_id, commit_h, pnonce, pake, pake_answer FROM phone_requests WHERE device_id = ? AND (commit_h IS NOT NULL OR pake IS NOT NULL)`)
     .bind(device.id)
-    .all<{ phone_id: string; commit_h: string; pnonce: string | null }>();
+    .all<{ phone_id: string; commit_h: string | null; pnonce: string | null; pake: string | null; pake_answer: string | null }>();
   const roundOf = new Map(rounds.results.map((r) => [r.phone_id, r]));
   const since = new Date(now - REVOKED_LISTED_DAYS * 86_400_000).toISOString();
   const revoked = await scope.env.DB.prepare(`SELECT id, revoked_at FROM account_phones WHERE user_id = ? AND revoked_at IS NOT NULL AND revoked_at > ? ORDER BY revoked_at DESC LIMIT 200`)
@@ -179,11 +211,12 @@ export async function phonesForDevice(scope: RequestScope, device: LinkedDevice,
       name: p.name,
       pub: p.pub,
       ...(p.att && p.cdj ? { att: p.att, cdj: p.cdj } : {}),
+      ...(p.pk && p.pkwa ? { pk: parseJson<Pk>(p.pk), pkwa: parseJson<Wa>(p.pkwa) } : {}),
       ...(p.model ? { model: p.model } : {}),
       ...(placeText(p.place) ? { place: placeText(p.place) } : {}),
       created_at: p.created_at,
       ...(p.asked_at ? { asked_at: p.asked_at } : {}),
-      ...(roundOf.has(p.id) ? { request: { commit: roundOf.get(p.id)!.commit_h, pnonce: roundOf.get(p.id)!.pnonce } } : {}),
+      ...(roundOf.has(p.id) ? { request: requestView(roundOf.get(p.id)!) } : {}),
     })),
     revoked: revoked.results,
   };
@@ -213,23 +246,69 @@ export async function putGrant(scope: RequestScope, device: LinkedDevice, phoneI
   return { ok: true };
 }
 
+const parseJson = <T>(v: string | null | undefined): T | null => {
+  if (!v) return null;
+  try {
+    return JSON.parse(v) as T;
+  } catch {
+    return null;
+  }
+};
+
+/** What a computer reads of its round with a phone: v6 (commit, pnonce) or v7 (pake with the phone's answer). */
+function requestView(r: { commit_h: string | null; pnonce: string | null; pake: string | null; pake_answer: string | null }) {
+  const pake = parseJson<PakeRound>(r.pake);
+  if (pake) return { pake: { ...pake, answer: parseJson<PakeAnswer>(r.pake_answer) } };
+  return { commit: r.commit_h, pnonce: r.pnonce };
+}
+
 export type PutRequestResult = { ok: true } | { ok: false; error: "not_found" | "invalid_request"; status: number };
 
 /** A computer says where the person's confirmation of one of its account's phones stands. */
-export type RequestInput = { state: RequestState; expiresAt: string | null; commit?: string; cpub?: string; nonce?: string | null };
+export type RequestInput = { state: RequestState; expiresAt: string | null; commit?: string; cpub?: string; nonce?: string | null; pake?: PakeRound };
 export async function putRequest(scope: RequestScope, device: LinkedDevice, phoneId: string, r: RequestInput, now = Date.now()): Promise<PutRequestResult> {
   if (!PHONE_ID_RE.test(phoneId)) return { ok: false, error: "not_found", status: 404 };
-  const expires = r.state === "pending" ? Date.parse(r.expiresAt ?? "") : NaN;
-  if (r.state === "pending" && (!Number.isFinite(expires) || expires > now + 60 * 60_000)) return { ok: false, error: "invalid_request", status: 400 };
-  // A pending request always carries its round of the code exchange (protocol v6 "Verifying a new phone").
-  if (r.state === "pending" && (!r.commit || !r.cpub)) return { ok: false, error: "invalid_request", status: 400 };
+  const timed = r.state === "pending" || r.state === "confirm";
+  const expires = timed ? Date.parse(r.expiresAt ?? "") : NaN;
+  if (timed && (!Number.isFinite(expires) || expires > now + 60 * 60_000)) return { ok: false, error: "invalid_request", status: 400 };
+  // A pending request always carries its round of the code exchange: v6 (commit) or v7 (pake).
+  if (r.state === "pending" && (!r.cpub || (!r.commit && !r.pake) || (r.commit && r.pake))) return { ok: false, error: "invalid_request", status: 400 };
   const phone = await scope.env.DB.prepare(`SELECT id FROM account_phones WHERE id = ? AND user_id = ? AND revoked_at IS NULL`).bind(phoneId, device.user_id).first();
   if (!phone) return { ok: false, error: "not_found", status: 404 };
   const ts = new Date(now).toISOString();
+  if (r.state === "confirm") {
+    // v7: the phone typed the code right; a phone the computer already has must confirm it.
+    await scope.env.DB.prepare(
+      `INSERT INTO phone_requests (device_id, phone_id, state, expires_at, updated_at) VALUES (?, ?, 'confirm', ?, ?)
+       ON CONFLICT(device_id, phone_id) DO UPDATE SET state = 'confirm', expires_at = excluded.expires_at, pake = NULL, pake_answer = NULL, updated_at = excluded.updated_at`,
+    )
+      .bind(device.id, phoneId, new Date(expires).toISOString(), ts)
+      .run();
+    await bumpRev(scope, phoneId).run();
+    return { ok: true };
+  }
+  if (r.pake) {
+    // v7: this attempt's share; the phone's answer is kept only while the share stays the same.
+    await scope.env.DB.prepare(
+      `INSERT INTO phone_requests (device_id, phone_id, state, expires_at, cpub, pake, pake_answer, commit_h, pnonce, cnonce, updated_at) VALUES (?1, ?2, 'pending', ?3, ?4, ?5, NULL, NULL, NULL, NULL, ?7)
+       ON CONFLICT(device_id, phone_id) DO UPDATE SET
+         state = 'pending',
+         expires_at = excluded.expires_at,
+         pake_answer = CASE WHEN json_extract(phone_requests.pake, '$.ya') = ?6 THEN phone_requests.pake_answer ELSE NULL END,
+         pake = excluded.pake,
+         cpub = excluded.cpub,
+         commit_h = NULL, pnonce = NULL, cnonce = NULL,
+         updated_at = excluded.updated_at`,
+    )
+      .bind(device.id, phoneId, new Date(expires).toISOString(), r.cpub, JSON.stringify(r.pake), r.pake.ya, ts)
+      .run();
+    await bumpRev(scope, phoneId).run();
+    return { ok: true };
+  }
   if (r.state !== "pending") {
     await scope.env.DB.prepare(
       `INSERT INTO phone_requests (device_id, phone_id, state, expires_at, updated_at) VALUES (?, ?, ?, NULL, ?)
-       ON CONFLICT(device_id, phone_id) DO UPDATE SET state = excluded.state, expires_at = NULL, commit_h = NULL, cpub = NULL, pnonce = NULL, cnonce = NULL, updated_at = excluded.updated_at`,
+       ON CONFLICT(device_id, phone_id) DO UPDATE SET state = excluded.state, expires_at = NULL, commit_h = NULL, cpub = NULL, pnonce = NULL, cnonce = NULL, pake = NULL, pake_answer = NULL, updated_at = excluded.updated_at`,
     )
       .bind(device.id, phoneId, r.state, ts)
       .run();
@@ -253,6 +332,33 @@ export async function putRequest(scope: RequestScope, device: LinkedDevice, phon
     .run();
   await bumpRev(scope, phoneId).run();
   return { ok: true };
+}
+
+export type PakeResult = { ok: true; fresh: boolean } | { ok: false; error: "not_found" | "already_answered"; status: number };
+
+/**
+ * v7: the phone's answer to one attempt of a computer's code exchange (the person typed the code
+ * the computer shows): once per attempt, only while the attempt is the computer's current one.
+ */
+export async function answerPake(scope: RequestScope, userId: string, phoneId: string, a: { device: string } & PakeAnswer): Promise<PakeResult> {
+  if (!PHONE_ID_RE.test(phoneId)) return { ok: false, error: "not_found", status: 404 };
+  const row = await scope.env.DB.prepare(
+    `SELECT q.pake, q.pake_answer FROM phone_requests q JOIN account_phones p ON p.id = q.phone_id JOIN plus_devices d ON d.id = q.device_id
+      WHERE q.phone_id = ? AND q.device_id = ? AND q.state = 'pending' AND q.pake IS NOT NULL
+        AND p.user_id = ? AND p.revoked_at IS NULL AND d.user_id = ? AND d.revoked_at IS NULL`,
+  )
+    .bind(phoneId, a.device, userId, userId)
+    .first<{ pake: string; pake_answer: string | null }>();
+  const round = parseJson<PakeRound>(row?.pake);
+  if (!row || !round || round.n !== a.n || round.ya !== a.ya) return { ok: false, error: "not_found", status: 404 };
+  const answer = JSON.stringify({ n: a.n, ya: a.ya, yb: a.yb, tag: a.tag, ...(a.wa ? { wa: a.wa } : {}) });
+  if (row.pake_answer !== null) return row.pake_answer === answer ? { ok: true, fresh: false } : { ok: false, error: "already_answered", status: 409 };
+  const r = await scope.env.DB.prepare(`UPDATE phone_requests SET pake_answer = ? WHERE phone_id = ? AND device_id = ? AND pake = ? AND pake_answer IS NULL`)
+    .bind(answer, phoneId, a.device, row.pake)
+    .run();
+  if (!r.meta.changes) return { ok: false, error: "already_answered", status: 409 };
+  await bumpRev(scope, phoneId).run();
+  return { ok: true, fresh: true };
 }
 
 export type SasResult = { ok: true; fresh: boolean } | { ok: false; error: "not_found" | "already_answered"; status: number };

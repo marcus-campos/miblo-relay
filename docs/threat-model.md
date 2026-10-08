@@ -2,14 +2,15 @@
 
 This is a review of this repository's own design: what changes when the relay, the account and the
 phone app run on a server of your own instead of miblo.ai, and what does not. The protocol's own
-threat model (v6) is at the end of [protocol.md](protocol.md); everything there still holds.
+threat model (v6, with the v7 rows and "v7: adversarial analysis") is at the end of [protocol.md](protocol.md); everything there still holds.
 
 ## The short version
 
 - **A malicious operator is exactly as powerful as a malicious miblo.ai, which the protocol already
   tolerates.** The relay only ever sees ciphertext, the keys are made on your computer and reach a
-  phone only sealed to that phone's own key, after you typed the 6-digit code the phone shows on
-  your computer, and the phone only accepts grants signed by a computer it confirmed. Nothing in a
+  phone only sealed to that phone's own key, after you typed on the phone the 6-digit code your
+  computer shows (protocol v7, Miblo 1.23: a password-authenticated key exchange the server only
+  relays), and the phone only accepts grants signed by a computer it confirmed. Nothing in a
   self-hosted server is trusted more than miblo.ai is.
 - **Self-hosting removes the one thing the protocol cannot protect against: the phone app's code.**
   On miblo.ai, whoever controls what miblo.ai serves runs code with the phone's keys (the protocol's
@@ -38,13 +39,18 @@ Same as a malicious miblo.ai, against the same defenses:
 
 - It cannot read anything: frames are AES-256-GCM under keys it never sees.
 - It cannot let a phone of its own in: a new phone gets nothing from a computer until the person
-  types, on that computer, the 6-digit code the phone shows (bound to the phone's key and the
-  computer's identity key by a commitment the server cannot change after the fact). It can show a
-  phone of its own in the account, but the code on that phone never matches.
+  types, on that phone, the 6-digit code the computer shows (v7). The code is the password of a
+  CPace-style key exchange over X25519 bound to the phone's key and the computer's identity key:
+  nothing the server relays reveals it, and it cannot answer for a key of its own except by
+  guessing (one try per attempt, 1 in 10^6; 3 wrong answers deny the request). (Before 1.23, v6:
+  the phone showed the code and the person typed it on the computer.)
 - It cannot put a computer of its own in front of your phone: the phone accepts only grants signed
-  by a computer it confirmed with the same code.
+  by a computer it confirmed (v7: the grant carries the confirmation of its own code exchange).
 - It cannot act on your computer: approvals, replies and tasks need the phone's passkey for each
-  action, checked by the computer; they are off until turned on at the desk with the gadget code.
+  action, checked by the computer; they are off until the person turns them on and confirms on a
+  phone the computer already has, typing the code the computer shows and passing the passkey's user
+  verification over the hash of exactly what is shown (3 wrong codes cancel, 6 requests an hour;
+  desktop browsers cannot confirm). Before 1.23 this was the gadget code.
 - It can deny service, drop or delay frames, and see metadata (above).
 - **It controls the phone app's code it serves.** A server you do not run yourself (a friend's) is
   trusted for that the same way miblo.ai is. Run your own, or check the build hashes.
@@ -107,7 +113,11 @@ Same as a malicious miblo.ai, against the same defenses:
 ### 4. Something on your computer (an AI agent, a script, malware)
 
 - `miblo server set` / `reset` / `confirm` are refused from an AI agent and need the code shown on
-  your Miblo's screen (the physical-presence trust root of every widening change).
+  your Miblo's screen.
+- Miblo+ widening changes (approvals, replies, history, tasks, folders, a longer timeout) and a
+  second phone are confirmed on a phone you already have, with the code this computer shows and
+  that phone's passkey (v7): an agent can start a request and read the code, but cannot type it on
+  your phone or pass its user verification.
 - `server.json` carries a MAC under the plugin's settings key; a file edited by anything else is not
   followed, and the plugin then sends nothing at all (it never falls back to miblo.ai either). Like
   `plus.json`, a process that can read the key file can still sign: the MAC keeps an edit alone from
@@ -131,9 +141,12 @@ Same as a malicious miblo.ai, against the same defenses:
 - **The phone app's origin is the only anchor on the phone:** a CA mis-issuance for your domain
   could serve another phone app; the plugin's pin protects the computer's calls, not the phone's.
   The protocol's code exchange and signed grants still keep such an app from getting a computer's
-  keys without the person typing a code at the computer.
+  keys without the person typing on the phone the code the computer shows; such an app could
+  describe a confirmation request as something else, but the computer applies only the request it
+  made itself.
 - **One process, in-memory limits (Node); per-isolate limits (Cloudflare without a rate-limit
   binding).** Enough for one person; a flood can still cost you bandwidth.
+- **No security e-mails:** a self-hosted server sends none: the notices the miblo.ai account e-mails (recovery code used or tried, new passkey, new phone) are only written to the server log as `{"event":"account_security"}` lines; watch the account page and that log.
 - **Updates are yours:** a self-hosted server does not update itself. Watch the repository's
   releases (security fixes are marked).
 - **The plugin still reads its signed release manifest from miblo.ai** (update checks), whatever
