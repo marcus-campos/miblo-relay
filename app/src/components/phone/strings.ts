@@ -3,6 +3,13 @@
 // "for the terminal" disclosures (`tech`), never as the main instruction.
 import type { Locale } from "@/lib/i18n";
 
+/** A wait said plainly: seconds up to 2 min, then minutes, then hours (the wait goes up to 1 h). */
+function waitText(s: number): string {
+  if (s <= 120) return `${s} s`;
+  if (s < 3600) return `${Math.ceil(s / 60)} min`;
+  return `${Math.ceil(s / 3600)} h`;
+}
+
 const pt = {
   appName: "Miblo",
   tabs: { now: "Agora", miblo: "Meu Miblo", settings: "Ajustes" },
@@ -182,7 +189,7 @@ const pt = {
       web: "Quer acessar a internet",
       other: "Quer usar uma ferramenta",
     } as Record<"command" | "edit" | "read" | "web" | "other", string>,
-    approvalExpires: (s: number) => `expira em ${s} s`,
+    approvalExpires: (s: number) => `expira em ${waitText(s)}`,
     approvalExpired: "Expirou. Responda no computador.",
     approvalPartial: "O pedido é grande demais para mostrar inteiro aqui. Pelo celular você só pode negar; para aprovar, use o computador.",
     approvalUnverified: "O que chegou não confere com o pedido. Só dá para negar.",
@@ -567,7 +574,7 @@ const en: PhoneStrings = {
       web: "Wants to go online",
       other: "Wants to use a tool",
     },
-    approvalExpires: (s: number) => `expires in ${s} s`,
+    approvalExpires: (s: number) => `expires in ${waitText(s)}`,
     approvalExpired: "Expired. Answer on the computer.",
     approvalPartial: "This request is too large to show in full here. From the phone you can only deny it; approve it on the computer.",
     approvalUnverified: "What arrived doesn't match the request. You can only deny it.",

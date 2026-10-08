@@ -82,7 +82,8 @@ export const MSG_MAX = 4000;
 /** UTF-8 bytes of a reply: the computer refuses longer ones. */
 export const REPLY_MAX_BYTES = 4000;
 /** An approval card is never shown longer than this, whatever the frame says. */
-export const APPROVAL_MAX_MS = 2 * 60 * 1000;
+/** The longest an approval may wait: the computer's setting tops at 1 h (plugin TIMEOUT_MAX_S). */
+export const APPROVAL_MAX_MS = 60 * 60 * 1000;
 /** A command longer than this gets the "long command" warning. */
 export const LONG_COMMAND = 300;
 const MAX_FUTURE_MS = 60_000;

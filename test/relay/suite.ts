@@ -788,6 +788,28 @@ describe("relay room: Miblo+ (v3)", () => {
     await settle(200);
     expect(late.messages.some((m) => m.ct === lost.ct)).toBe(false);
   });
+
+  it("does not expire an approval frame itself: a long-waiting request (up to 1 h) and its answer cross the relay at any time", async () => {
+    const ph = enrolled();
+    const { p, writer } = await plusWith(ph);
+    const reader = await openPhone(p, ph);
+    const ask = sealed("approval", ph.id);
+    writer.send(ask);
+    await until(() => reader.messages.length === 1);
+    // 59 minutes later (the computer's wait is up to 1 h) the answer still gets to the computer.
+    await advance(p.room, 59 * 60 * 1000);
+    const answer = { t: "up", ch: "approval", iv: rand(12), ct: rand(200) };
+    reader.send(answer);
+    await until(() => writer.messages.length === 1);
+    expect(writer.messages[0]).toEqual({ ...answer, p: ph.id });
+    // And a new request later still goes to the phone: the relay holds no approval state to expire.
+    const again = sealed("approval", ph.id);
+    writer.send(again);
+    await until(() => reader.messages.length === 2);
+    expect(reader.messages[1]).toMatchObject({ ch: "approval", ct: again.ct });
+    const s = await storage(p.room);
+    expect(JSON.stringify(s.entries)).not.toContain(ask.ct);
+  });
 });
 
 describe("relay room: each enrolled phone (v5)", () => {

@@ -6,7 +6,7 @@
 // so only the behaviour is shared with the site (usePopover); no state beyond what each one shows.
 import { useId, type ReactNode } from "react";
 import { usePopover } from "@/components/ui/usePopover";
-import type { AppTab } from "./app-model";
+import { ringText, type AppTab } from "./app-model";
 import type { PhoneStrings } from "./strings";
 import styles from "./phone.module.css";
 
@@ -263,7 +263,7 @@ export function CountdownRing({ left, fraction, urgent, label }: { left: number;
         <circle cx="22" cy="22" r={r} className={styles.ringFill} strokeDasharray={c} strokeDashoffset={c * (1 - fraction)} transform="rotate(-90 22 22)" />
       </svg>
       <span className={styles.ringText} aria-hidden="true">
-        {left}
+        {ringText(left)}
       </span>
     </span>
   );

@@ -33,6 +33,13 @@ export function countdown(a: Pick<ApprovalView, "at" | "expires">, now: number):
   return { left, fraction: Math.min(1, remaining / total), urgent: left <= 10 };
 }
 
+/** The short form of the time left for the countdown ring: seconds, then minutes ("12m"), then hours ("1h"). */
+export function ringText(left: number): string {
+  if (left < 100) return String(left);
+  if (left < 3600) return `${Math.ceil(left / 60)}m`;
+  return `${Math.ceil(left / 3600)}h`;
+}
+
 /** Approvals still waiting for an answer (not expired, none given). */
 export function pendingApprovals(approvals: readonly ApprovalView[], outcomes: Readonly<Record<string, string>>, now: number): ApprovalView[] {
   return approvals.filter((a) => a.expires > now && !outcomes[a.id]);
