@@ -331,11 +331,13 @@ export async function rejectComputer(me: AccountIdentity, cpub: string): Promise
  * and the app says so). Residual: withholding grants delays new keys (a denial of service only).
  * -> the pairings now kept, or null when the grants could not be read (nothing changes then).
  */
-export async function syncGrants(me: AccountIdentity, grants: GrantRow[]): Promise<{ pairings: StoredPairing[]; changed: boolean; confirm: ShownCode[] } | null> {
+export async function syncGrants(me: AccountIdentity, grants: GrantRow[]): Promise<{ pairings: StoredPairing[]; changed: boolean; confirm: ShownCode[]; issue: GrantIssue | null } | null> {
   let changed = false;
   const rooms = new Set<string>();
   const confirm: ShownCode[] = [];
+  let issue: GrantIssue | null = null;
   for (const g of grants.slice(0, 16)) {
+    const name = String(g.device?.name ?? "").slice(0, 40);
     try {
       // v7: a computer this phone typed the code of: its grant's confirmation pins it.
       if (typeof g.cpub === "string" && typeof g.sig === "string" && !(me.pins ?? []).some((p) => p.cpub === g.cpub) && (me.pakes ?? []).some((r) => r.cpub === g.cpub)
@@ -350,13 +352,54 @@ export async function syncGrants(me: AccountIdentity, grants: GrantRow[]): Promi
         if (!confirm.some((c) => c.cpub === g.cpub)) confirm.push({ device: g.device.id, name: g.device.name, code: r.code!, cpub: g.cpub!, fp: await computerFingerprint(g.cpub!) });
         continue;
       }
-      if (verdict !== "ok") continue;
+      if (verdict !== "ok") {
+        issue ??= { kind: await grantProblem(me, g), device: name };
+        continue;
+      }
       const payload = await openGrant(me.priv, me.id, g);
       rooms.add(payload.room);
       if (await savePairingFromGrant(payload, { id: me.id, credId: me.credId, uid: me.uid }, g.device.id, g.cpub!)) changed = true;
     } catch {
-      // Not for this phone, or tampered: ignored.
+      // Not for this phone, or tampered: ignored (and said, for the waiting screen's details).
+      issue ??= { kind: "bad_key", device: name };
     }
   }
-  return { pairings: (await listPairings()).filter((p) => p.acct?.uid === me.uid), changed, confirm };
+  return { pairings: (await listPairings()).filter((p) => p.acct?.uid === me.uid), changed, confirm, issue };
+}
+
+/**
+ * Why a grant this phone holds was not used (the waiting screen's "Detalhes"): "bad_sig" (not
+ * signed by the computer key it names), "bad_key" (sealed to another key: it does not open with
+ * this phone's), "not_pinned" (it opens, but nothing on this phone confirms that computer: no code
+ * typed for it here, or the confirmation of another attempt).
+ */
+export type GrantIssue = { kind: "bad_sig" | "bad_key" | "not_pinned"; device: string };
+async function grantProblem(me: AccountIdentity, g: GrantRow): Promise<GrantIssue["kind"]> {
+  if (typeof g.cpub !== "string" || typeof g.sig !== "string" || !(await verifyGrantSig(me.id, { ...g, cpub: g.cpub, sig: g.sig }))) return "bad_sig";
+  try {
+    await openGrant(me.priv, me.id, g);
+  } catch {
+    return "bad_key";
+  }
+  return "not_pinned";
+}
+
+/** What the waiting screen's "Detalhes" line says: the step this phone waits for, in plain words. */
+export type WaitDetail =
+  | { k: "bad_key" | "bad_sig" | "not_pinned"; device: string }
+  | { k: "type_code" | "code_sent" | "held" | "allow"; device: string }
+  | { k: "no_answer" }
+  | null;
+export function waitDetail(requests: RequestRow[], issue: GrantIssue | null, me: { pakes?: { device: string; at: number }[] }, now: number): WaitDetail {
+  if (issue) return { k: issue.kind, device: issue.device };
+  const w = waitingFor(requests, now);
+  if (!w) return { k: "no_answer" };
+  if (w.kind === "code") {
+    // This phone already answered this computer's code (the run is kept): the computer checks it.
+    const sent = (me.pakes ?? []).some((r) => r.device === w.deviceId && now - r.at < 15 * 60_000);
+    return { k: sent ? "code_sent" : "type_code", device: w.device };
+  }
+  if (w.kind === "confirm") return { k: "held", device: w.device };
+  if (w.kind === "pending") return { k: "allow", device: w.device };
+  return null;  // expired and denied: the screen already says so
 }

@@ -38,6 +38,9 @@ import {
   sendSasAnswers,
   syncGrants,
   waitingFor,
+  waitDetail,
+  type WaitDetail,
+  type GrantIssue,
   answerCode,
   passkeyPlan,
   type PhonePk,
@@ -263,6 +266,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   const [keyMismatch, setKeyMismatch] = useState(false);
   /** More code exchanges than a person pairing makes: someone may be trying to get in. */
   const [sasAlert, setSasAlert] = useState(false);
+  // Why the grant this phone holds was not used (the waiting screen says so).
+  const [grantIssue, setGrantIssue] = useState<GrantIssue | null>(null);
   /** Computers whose code this phone showed and that granted it: the person confirms them here. */
   const [toConfirm, setToConfirm] = useState<ShownCode[]>([]);
 
@@ -320,6 +325,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       setPairings((cur) => (cur && cur.length ? [] : cur));
       setCodes([]);
       setToConfirm([]);
+      setGrantIssue(null);
     };
     (async () => {
       const st = await loadMfa();
@@ -379,6 +385,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       const r = await syncGrants(me, got.grants);
       if (!alive || !r) return;
       setToConfirm(r.confirm);
+      setGrantIssue(r.issue);
       if (r.changed) {
         setPairings(r.pairings);
         setSelected((cur) => (cur && r.pairings.some((x) => x.room === cur) ? cur : (r.pairings[0]?.room ?? null)));
@@ -956,6 +963,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
               onJoin={() => void joinAccount()}
               reuse={joinCard}
               onCheck={() => setJoinTick((n) => n + 1)}
+              detail={join.k === "ready" ? waitDetail(join.requests, grantIssue, join.me, now) : null}
               trust={trustCards}
               now={now}
               onAskAgain={async () => {
@@ -1651,6 +1659,7 @@ function JoinScreen({
   onAskAgain,
   trust,
   reuse,
+  detail,
 }: {
   t: PhoneStrings;
   lang: Locale;
@@ -1666,6 +1675,7 @@ function JoinScreen({
   reuse?: React.ReactNode;
   now: number;
   onAskAgain: () => Promise<void>;
+  detail: WaitDetail;
 }) {
   const waiting = join.k === "ready" ? waitingFor(join.requests, now) : null;
   return (
@@ -1740,6 +1750,11 @@ function JoinScreen({
             <p>{t.join.waitingBody}</p>
           )}
           {trust}
+          {detail && (
+            <p className="text-[0.9rem] text-ink-2" data-testid="join-detail" data-kind={detail.k}>
+              {detail.k === "no_answer" ? t.join.detail.no_answer : t.join.detail[detail.k](detail.device)}
+            </p>
+          )}
           <Tech t={t} commands={waiting?.kind === "pending" ? t.join.allowTech : t.join.waitingTech} />
           <button type="button" className="btn btn-ghost w-full" onClick={onCheck}>
             {t.join.checkNow}
