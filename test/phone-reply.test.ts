@@ -4,7 +4,7 @@
 // (the screen imports next/navigation, which only the app build maps here).
 import { describe, expect, it } from "vitest";
 import { parseHistory, parseReplyAck } from "@/components/phone/plus";
-import { ackLine, offText, reasonText, replyPlan, whenText } from "@/components/phone/reply-model";
+import { ackLine, offText, reasonText, replyPlan, sentHowOf, whenText } from "@/components/phone/reply-model";
 import { replyStrings } from "@/components/phone/reply-strings";
 
 const NONCE = "a".repeat(22);
@@ -61,6 +61,15 @@ describe("1.24 replies on the phone", () => {
     expect(ackLine(ack("delivered"), null, "en").text).toBe("Delivered.");
     expect(ackLine(ack("refused", "session_ended"), "turn_end", "pt")).toEqual({ text: "Não entregue: a sessão terminou antes de pegar a resposta.", kind: "bad" });
     expect(ackLine(ack("refused", "expired"), "turn_end", "en").text).toBe("Not delivered: it waited an hour and the session never took it.");
+  });
+
+  it("remembers how a reply went out only when it is sure", () => {
+    expect(sentHowOf({ replyHow: "now", state: "idle" })).toBe("now");
+    expect(sentHowOf({ replyHow: "turn_end", state: "working" })).toBe("turn_end");
+    // Idle, no idle path: the next turn, or the desktop app types it at once. Nothing claimed.
+    expect(sentHowOf({ replyHow: "turn_end", state: "idle" })).toBeNull();
+    expect(sentHowOf({ replyHow: null, state: "idle" })).toBeNull();
+    expect(sentHowOf(undefined)).toBeNull();
   });
 
   it("has words for every refusal the 1.24 computer sends, in both languages", () => {

@@ -82,6 +82,7 @@ import {
   type TaskInfo,
 } from "./plus";
 import { ApprovalCard, CodeEntry, ConfirmCard, ReuseQuestion, SessionScreen, Upsell, type ActBlock } from "./PlusViews";
+import { sentHowOf } from "./reply-model";
 import { MibloHero, MibloThumb } from "./MibloHero";
 import { acceptPetFrame } from "./pet-cache";
 import {
@@ -724,7 +725,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     }
     const client = clients.current.get(p.room);
     if (!client || !(await client.sendUp("reply", { ...built.payload, wa }))) return "offline";
-    const how = plus[p.room]?.histories[session]?.replyHow ?? null;
+    const how = sentHowOf(plus[p.room]?.histories[session]);
     updatePlus(p.room, (r) => ({ ...r, lastReply: { ...r.lastReply, [session]: { nonce: built.nonce, at: wallClock(), how } } }));
     return "ok";
   };

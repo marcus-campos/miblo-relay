@@ -58,6 +58,18 @@ export function reasonText(reason: string, lang: Locale): string {
   return r.reasons[key] ?? r.other(reason || "?");
 }
 
+/**
+ * What to remember of a reply as it leaves, so "Entregue" can say how it went in: `now`, or
+ * `turn_end` while the session works. An idle session of a tool with no idle path (`turn_end`
+ * while idle) may get it at its next turn or typed by the desktop app at once, so nothing is
+ * claimed for it (null: plain "Entregue.").
+ */
+export function sentHowOf(h: { replyHow: ReplyHow | null; state: SessionState } | undefined): ReplyHow | null {
+  if (!h?.replyHow) return null;
+  const plan = replyPlan(h.replyHow, h.state);
+  return plan.k === "send" && plan.when === "nextTime" ? null : h.replyHow;
+}
+
 export type AckLine = { text: string; kind: "wait" | "ok" | "bad" };
 
 /**
