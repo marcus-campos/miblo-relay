@@ -117,7 +117,7 @@ export function parseApps(v: unknown, lang: "pt" | "en"): AppView[] {
         });
       return {
         id: a.id as string,
-        name: labelText(a.name, lang, 24) || (a.id as string),
+        name: labelText(a.names, lang, 24) || labelText(a.name, lang, 24) || (a.id as string),
         enabled: a.enabled === undefined ? true : a.enabled === true,
         needsSetup: a.needsSetup === true,
         preview: parseCard(a.preview),

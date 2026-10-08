@@ -18,8 +18,8 @@ export type CardColor = (typeof CARD_COLORS)[number];
 export const PALETTE: Record<CardColor, string> = { amber: '#f5a524', blue: '#60a5fa', green: '#4ade80', red: '#ef4444', white: '#eeeeee', grey: '#aaaaaa' };
 const INK = { bg: '#0b0b0d', text: '#eeeeee', muted: '#aaaaaa', track: '#262629' };
 
-/** Limits of the contract (title 24, text 40, big value 10); a caption is cut at 20. */
-export const LIMITS = { title: 24, text: 40, big: 10, label: 20, tool: 24, items: 4, sparkMin: 2, sparkMax: 24, json: 1024 } as const;
+/** The plugin's limits (lib/screen-card.js: title 24, caption 16, big value 10, text 40, tool 20). */
+export const LIMITS = { title: 24, text: 40, big: 10, label: 16, tool: 20, items: 4, sparkMin: 2, sparkMax: 24, json: 1024 } as const;
 
 export type CardLeaf =
   | { t: 'big'; value: string; label: string }
@@ -404,8 +404,9 @@ export interface ScreenApp {
 }
 
 /**
- * The App screen a snapshot carries (`screen: {card, bg, tool?, frames?}`), or null: none, or a
- * card the core would refuse. `bg` beside the card wins over the card's own.
+ * The App screen a snapshot carries (the plugin's ScreenHub view: `screen: {card, bg, shown}`, the
+ * card with its program's `tool`), or null: none, or a card the core would refuse. `bg` beside the
+ * card wins over the card's own (the bridge sends null there while it has no such frame).
  */
 export function screenAppOf(snapshot: unknown): ScreenApp | null {
   if (!isObj(snapshot) || !isObj(snapshot.screen)) return null;
@@ -413,8 +414,8 @@ export function screenAppOf(snapshot: unknown): ScreenApp | null {
   if (isObj(s.card) && JSON.stringify(s.card).length > LIMITS.json * 4) return null;
   const card = parseCard(s.card);
   if (!card) return null;
-  const tool = cleanLine(s.tool, LIMITS.tool);
-  const bg = s.bg === undefined || s.bg === null ? card.bg : frameSlot(s.bg);
+  const tool = cleanLine(s.tool ?? (s.card as Record<string, unknown>).tool, LIMITS.tool);
+  const bg = 'bg' in s ? frameSlot(s.bg) : card.bg;
   const fr = Array.isArray(s.frames) ? s.frames.find((f) => isObj(f) && f.slot === bg) : null;
   const at = isObj(fr) && typeof fr.at === 'number' && Number.isFinite(fr.at) ? fr.at : null;
   const json = JSON.stringify({ ...(s.card as Record<string, unknown>), bg: bg === null ? undefined : `frame:${bg}`, tool });
