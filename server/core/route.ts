@@ -54,10 +54,22 @@ export function accountActionLimited(userId: string, action: string): boolean {
 
 /** The second-factor routes: per-IP and per-account limits, and what the session needs for this step. */
 export type MfaStep = "verify" | "setup" | "session" | "fresh";
-export async function mfaRequest<S extends z.ZodType>(scope: RequestScope, request: Request, schema: S, step: MfaStep): Promise<MemberRequest<z.infer<S>>> {
+/**
+ * `stepOf`: the step, or a function of the validated body that picks it (a route serving two steps
+ * reads its body only after the rate limit, the session and readJson's origin and size checks).
+ */
+export async function mfaRequest<S extends z.ZodType>(
+  scope: RequestScope,
+  request: Request,
+  schema: S,
+  stepOf: MfaStep | ((data: z.infer<S>) => MfaStep),
+): Promise<MemberRequest<z.infer<S>>> {
   if (limitedNetwork("mfa", clientIp(request), 30)) return { ok: false, response: tooMany() };
-  const r = await memberRequest(scope, request, schema, { allowPending: step === "verify" });
+  const r = await memberRequest(scope, request, schema, { allowPending: typeof stepOf === "function" || stepOf === "verify" });
   if (!r.ok) return r;
+  const step = typeof stepOf === "function" ? stepOf(r.data) : stepOf;
+  // What memberRequest answers a pending session when the step does not accept one.
+  if (step !== "verify" && r.session.pending) return { ok: false, response: error("mfa_required", 401) };
   if (limited(`mfa-user:${r.session.user.id}`, 20)) return { ok: false, response: tooMany() };
   const need: MfaNeed = step === "verify" ? "none" : step === "setup" ? (r.session.mfa.enrolled ? "fresh" : "none") : step;
   const blocked = mfaBlock(r.session, need);

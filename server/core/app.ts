@@ -173,17 +173,12 @@ const ROUTES: Route[] = [
     });
   }),
   route("POST", "/api/community/mfa/passkey/options", async (scope, request) => {
-    let purpose: "register" | "verify" = "verify";
-    try {
-      purpose = S.passkeyOptionsSchema.parse(await request.clone().json()).purpose;
-    } catch {
-      return error("invalid_request", 400);
-    }
-    const r = await mfaRequest(scope, request, S.passkeyOptionsSchema, purpose === "register" ? "setup" : "verify");
+    // The body is read once, after the rate limit, the session and the origin and size checks.
+    const r = await mfaRequest(scope, request, S.passkeyOptionsSchema, (d) => (d.purpose === "register" ? "setup" : "verify"));
     if (!r.ok) return r.response;
     const rp = relyingParty(scope);
     if (!rp) return error("mfa_unavailable", 503);
-    if (purpose === "register") return json(await registrationOptions(scope, r.session, rp));
+    if (r.data.purpose === "register") return json(await registrationOptions(scope, r.session, rp));
     const opts = await assertionOptions(scope, r.session, rp);
     if (!opts.allowCredentials.length) return error("no_passkey", 404);
     return json(opts);
