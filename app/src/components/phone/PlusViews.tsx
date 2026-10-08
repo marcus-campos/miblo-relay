@@ -9,7 +9,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Locale } from "@/lib/i18n";
 import { countdown, toolKind } from "./app-model";
 import { CountdownRing, Icon, Tech } from "./AppParts";
-import { allowable, inputView, type ApprovalView, type ConfirmView, type HistoryView, type ReplyAck, type TaskView, type Visible } from "./plus";
+import { allowable, inputView, type ApprovalView, type ConfirmView, type HistoryView, type ReplyAck, type ReplyHow, type TaskView, type Visible } from "./plus";
+import { offText, replyPlan } from "./reply-model";
+import { SessionReplyCard } from "./SessionReplyCard";
 import type { RequestRow } from "./account-join";
 import { ChatMessages, useScrollAnchor } from "./ChatView";
 import type { PhoneStrings } from "./strings";
@@ -263,6 +265,7 @@ export function SessionScreen({
   online,
   ack,
   sentAt,
+  sentHow = null,
   now,
   banner,
   task,
@@ -288,6 +291,8 @@ export function SessionScreen({
   ack: ReplyAck | null;
   /** When the last reply left the phone (null: none yet). */
   sentAt: number | null;
+  /** 1.24: the `replyHow` the history said when that reply was sent. */
+  sentHow?: ReplyHow | null;
   now: number;
   /** Approvals waiting elsewhere: a strip under the bar. */
   banner?: ReactNode;
@@ -355,21 +360,30 @@ export function SessionScreen({
       {t.task.newTask}
     </button>
   ) : undefined;
-  const off: ComposerOff = task
+  // 1.24: the computer says how a reply would go in (`replyHow`), for every AI tool and for tasks.
+  const plan = history?.replyHow ? replyPlan(history.replyHow, history.state ?? stateKind) : null;
+  const blockOff: ComposerOff =
+    block === "noPasskeys"
+      ? { reason: t.chat.noPasskey }
+      : block === "notEnrolled"
+        ? { reason: t.chat.notLinked, commands: [tech.link, tech.on] }
+        : block === "revoked"
+          ? { reason: t.chat.revoked, commands: [tech.link] }
+          : null;
+  const repliesOff: ComposerOff = !repliesOn ? { reason: t.chat.replyOff, commands: [tech.replies] } : null;
+  const planOff: ComposerOff =
+    !plan || plan.k === "send"
+      ? null
+      : plan.why === "off"
+        ? { reason: t.chat.replyOff, commands: [tech.replies] }
+        : { reason: offText(plan.why, harness, lang), action: plan.why === "unsupported" || plan.why === "idleUnsupported" ? newTaskButton : undefined };
+  // Before 1.24 (no `replyHow`): replies only in Claude Code, through its channel, never to a task.
+  const v6Off: ComposerOff = task
     ? { reason: t.chat.replyTask, action: newTaskButton }
     : !isClaude
       ? { reason: t.chat.replyOther, action: newTaskButton }
-      : block === "noPasskeys"
-        ? { reason: t.chat.noPasskey }
-        : block === "notEnrolled"
-          ? { reason: t.chat.notLinked, commands: [tech.link, tech.on] }
-          : block === "revoked"
-            ? { reason: t.chat.revoked, commands: [tech.link] }
-            : !repliesOn
-              ? { reason: t.chat.replyOff, commands: [tech.replies] }
-              : history && !history.reply
-                ? { reason: t.chat.replyChannel, commands: [tech.replies, tech.channel] }
-                : null;
+      : (blockOff ?? repliesOff ?? (history && !history.reply ? { reason: t.chat.replyChannel, commands: [tech.replies, tech.channel] } : null));
+  const off: ComposerOff = plan ? (blockOff ?? repliesOff ?? planOff) : v6Off;
   const taskRunning = task?.state === "running";
 
   return (
@@ -447,6 +461,8 @@ export function SessionScreen({
                 )}
                 {off.action}
               </div>
+            ) : plan?.k === "send" ? (
+              <SessionReplyCard lang={lang} when={plan.when} ack={ack} sentHow={sentHow} note={note} />
             ) : (
               <>
                 {(ackText ?? note) && (

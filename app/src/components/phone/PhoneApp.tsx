@@ -77,6 +77,7 @@ import {
   type HistoryView,
   type PlusCaps,
   type ReplyAck,
+  type ReplyHow,
   type TaskAck,
   type TaskInfo,
 } from "./plus";
@@ -111,7 +112,8 @@ type PlusRoom = {
   outcomes: Record<string, string>;
   /** Reply nonce -> the computer's acknowledgement; session -> its last reply's nonce. */
   acks: Record<string, ReplyAck>;
-  lastReply: Record<string, { nonce: string; at: number }>;
+  /** `how`: the session's `replyHow` (1.24) when the reply was sent, for "Entregue" to say how it went in. */
+  lastReply: Record<string, { nonce: string; at: number; how?: ReplyHow | null }>;
   /** v6 "Nova tarefa": what the computer allows (null until asked), and its answers to tasks. */
   taskInfo: TaskInfo | null;
   taskAcks: Record<string, TaskAck>;
@@ -722,7 +724,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     }
     const client = clients.current.get(p.room);
     if (!client || !(await client.sendUp("reply", { ...built.payload, wa }))) return "offline";
-    updatePlus(p.room, (r) => ({ ...r, lastReply: { ...r.lastReply, [session]: { nonce: built.nonce, at: wallClock() } } }));
+    const how = plus[p.room]?.histories[session]?.replyHow ?? null;
+    updatePlus(p.room, (r) => ({ ...r, lastReply: { ...r.lastReply, [session]: { nonce: built.nonce, at: wallClock(), how } } }));
     return "ok";
   };
 
@@ -935,6 +938,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
           online={phoneOnline && currentLive?.link === "open"}
           ack={last ? (room?.acks[last.nonce] ?? null) : null}
           sentAt={last?.at ?? null}
+          sentHow={last?.how ?? null}
           now={now}
           banner={waitingBanner}
           task={h?.task ?? null}

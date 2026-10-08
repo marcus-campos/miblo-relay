@@ -42,12 +42,20 @@ export type HistoryMsg = { id: string; role: Role; text: string; at: number | nu
 /** v6: a remote task's state ("Nova tarefa"). */
 export type TaskState = "running" | "done" | "failed" | "stopped";
 export type TaskView = { id: string; tool: string; folder: string; path: string | null; state: TaskState; started: number; ended: number | null; code: number | null; reason: string | null };
+/**
+ * 1.24: how a reply to this session would go in now (the history frame's `replyHow`): at once, when
+ * the session finishes its turn, or the reason the computer would refuse it.
+ */
+export type ReplyHow = "now" | "turn_end" | "unknown_mode" | "permissive_session" | "old_session" | "idle_unsupported" | "unsupported" | "off";
+const REPLY_HOWS = new Set<ReplyHow>(["now", "turn_end", "unknown_mode", "permissive_session", "old_session", "idle_unsupported", "unsupported", "off"]);
 /** `rt`: the reply token the computer issued with this history (a reply must answer it). */
 export type HistoryView = {
   session: string;
   title: string;
   harness: string;
   reply: boolean;
+  /** 1.24: how a reply would go in (null: a computer before 1.24, which says only `reply`). */
+  replyHow: ReplyHow | null;
   rt: string | null;
   at: number;
   msgs: HistoryMsg[];
@@ -72,7 +80,8 @@ export type ApprovalView = {
   expires: number;
 };
 export type ApprovalDone = { id: string; outcome: "allow" | "deny" | "timeout" | "answered" };
-export type ReplyAck = { nonce: string; state: "sent" | "delivered" | "refused"; reason: string };
+/** `queued` (1.24): waiting for the session to finish its turn (`how`: "turn_end"). */
+export type ReplyAck = { nonce: string; state: "queued" | "sent" | "delivered" | "refused"; reason: string; how: "now" | "turn_end" | null };
 /** The Miblo+ capabilities a status frame announces; `phones`: the ids of the enrolled phones. */
 export type PlusCaps = { on: boolean; approvals: boolean; replies: boolean; tasks: boolean; phones: string[] };
 export type EnrollResult = { phone: string; ok: boolean; fp: string | null; reason: string };
@@ -321,6 +330,7 @@ export function parseHistory(payload: unknown): HistoryView | null {
     title: cleanDisplay(p.title, 80),
     harness: typeof p.harness === "string" && ID_RE.test(p.harness) ? p.harness : "claude",
     reply: p.reply === true,
+    replyHow: typeof p.replyHow === "string" && REPLY_HOWS.has(p.replyHow as ReplyHow) ? (p.replyHow as ReplyHow) : null,
     rt: typeof p.rt === "string" && /^[A-Za-z0-9_-]{22}$/.test(p.rt) ? p.rt : null,
     at,
     msgs,
@@ -503,8 +513,9 @@ export function parseReplyAck(payload: unknown): ReplyAck | null {
   const p = obj(payload);
   if (!p || p.kind !== "reply_ack" || typeof p.nonce !== "string" || !NONCE_RE.test(p.nonce)) return null;
   const state = p.state;
-  if (state !== "sent" && state !== "delivered" && state !== "refused") return null;
-  return { nonce: p.nonce, state, reason: typeof p.reason === "string" ? p.reason.slice(0, 40) : "" };
+  if (state !== "queued" && state !== "sent" && state !== "delivered" && state !== "refused") return null;
+  const how = p.how === "now" || p.how === "turn_end" ? p.how : null;
+  return { nonce: p.nonce, state, reason: typeof p.reason === "string" ? p.reason.slice(0, 40) : "", how };
 }
 
 const utf8Length = (s: string) => new TextEncoder().encode(s).length;

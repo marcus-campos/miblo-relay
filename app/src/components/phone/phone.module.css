@@ -1529,6 +1529,46 @@ button.sessionButton:active {
 .composerNote + .composerRow {
   margin-top: 0.4rem;
 }
+/* 1.24 (SessionReplyCard.tsx): what a reply will do, and what happened to the last one. */
+.replyCard {
+  margin-bottom: 0.45rem;
+}
+.replyAck {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.replyDot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ink-2);
+  transform: translateY(-0.05rem);
+}
+.replyAck[data-kind="wait"] .replyDot {
+  background: var(--amber);
+}
+.replyAck[data-kind="ok"] .replyDot {
+  background: var(--green);
+}
+.replyAck[data-kind="bad"] {
+  color: var(--red-ink);
+}
+.replyAck[data-kind="bad"] .replyDot {
+  background: var(--red);
+}
+.replyWhen {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+.replyWhen[data-when="nextTime"] {
+  color: var(--amber-ink);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .eyes,
