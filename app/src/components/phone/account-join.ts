@@ -250,8 +250,6 @@ export async function grantVerdict(phone: string, pins: Pin[], rounds: SasRound[
 
 // --- v7: the computer shows the code, this phone types it ------------------------------------------
 
-/** A v7 run older than this goes when this phone answers another code (a request waits 15 minutes). */
-const PAKE_KEPT_MS = 30 * 60_000;
 export type PakeSend = "ok" | "cancelled" | "error" | "gone";
 
 /**
@@ -274,7 +272,9 @@ export async function answerCode(csrf: string, me: AccountIdentity, q: RequestRo
     }
   }
   const run: PakeRun = { device: q.device.id, cpub: q.cpub, isk: ans.isk, at: Date.now() };
-  const next = { ...me, pakes: [...(me.pakes ?? []).filter((x) => Date.now() - x.at < PAKE_KEPT_MS && x.cpub !== q.cpub), run].slice(-8) };
+  // Runs are kept until used (the computer's grant pins it) or pushed out by newer ones: a grant
+  // read late still pins (pinByCode checks no age either).
+  const next = { ...me, pakes: [...(me.pakes ?? []).filter((x) => x.cpub !== q.cpub), run].slice(-8) };
   await saveIdentity(next);
   const r = await post(`/api/phones/${me.id}/pake`, { device: q.device.id, n: q.pake.n, ya: q.pake.ya, yb: ans.yb, tag: ans.tag, ...(wa ? { wa } : {}) }, csrf);
   return { result: r.status === 200 ? "ok" : r.status === 404 || r.status === 409 ? "gone" : "error", me: next };
