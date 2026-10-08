@@ -11,6 +11,12 @@ in docs/threat-model.md.
 Miblo is local-first. The phone companion is OPT-IN and END-TO-END ENCRYPTED: the relay on
 miblo.ai only forwards opaque ciphertext and never sees keys or plaintext.
 
+1.24 (see "1.24: replies in every AI tool" below): replies from the phone reach every integrated AI
+tool, at the end of its turn or while idle where the tool allows it; each tool's capabilities are
+published (`capabilities`), the history frame says how a reply would go in (`replyHow`), a reply
+can be `queued`, remote Claude Code tasks take replies, and the desktop app types replies into
+idle Terminal or iTerm2 sessions of tools that have no other way. No frame or crypto change.
+
 v7 (Miblo 1.23, see "v7" below): the computer shows a 6-digit code and the phone types it, both
 to let a new phone in (a password-authenticated key exchange over the code) and to confirm on a
 phone the person already has any change that widens what phones can do (approvals, replies,
@@ -462,9 +468,9 @@ own session (matched by the Claude Code process the hooks also report) and emits
 `meta.miblo_nonce`. Claude Code takes them in only when the session was started with
 `claude --dangerously-load-development-channels server:miblo-phone`; otherwise it drops them
 silently, so the phone shows `sent` (handed to Claude Code) and never `delivered` (seen in the
-transcript), plus a hint after 20 s. No terminal keystrokes are ever injected. Codex, Gemini
-CLI, Copilot, Cursor and OpenCode have no official way to add input to a running session: the
-phone shows "replies only in Claude Code" for them.
+transcript), plus a hint after 20 s. Before 1.24 no terminal keystrokes were injected and the
+other tools got no replies; from 1.24 see "1.24: replies in every AI tool" (the channel stays
+only for Claude Code sessions started before the update).
 
 ### The bridge's local port
 Hooks and the CLI reach the bridge on 127.0.0.1 with a per-user key (`bridge.key`, 0600): every
@@ -1011,6 +1017,163 @@ agent) asked for on that computer and which the computer shows as applied. Someo
 person's unlocked phone and seeing the computer's screen can confirm as the person. A lost phone
 keeps its rights until revoked. Every use of a recovery code, failed attempts at one (at most one
 e-mail an hour) and every new passkey send the account's security notice e-mail.
+
+## 1.24: replies in every AI tool
+
+The plugin's side of this section is kept in the claude_gadget repository
+(`docs/phone-relay-protocol.md`, "Phone relay protocol: the plugin side of replies in every AI
+tool"); this copy is updated from it. Nothing changes on the relay or in the frames' crypto: the
+`reply` frame is the v5 one, sealed and passkey-signed as before, for any tool's session.
+
+Principle: each AI keeps working its own way without depending on Miblo, and Miblo does not
+interfere. Approvals and every other control exist only where the tool itself asks (its native
+prompt, relayed). Messaging is the one thing Miblo builds where a tool lacks it. The journey: "Você
+responde pelo celular. Se a sessão está trabalhando, a resposta entra quando ela termina a vez; se
+está parada, ela acorda e responde." No channel, no new window, no system dialog (the "Replies
+(Claude Code, beta)" channel above stays only for Claude Code sessions started before the update).
+
+### 1.24: capabilities per tool
+
+`miblo plus status --json` (`capabilities`) and the bridge's `GET /plus/status` (`capabilities`)
+carry the plugin's `lib/harness/index.js` `CAPABILITIES`:
+
+| Tool | `replyTurnEnd` | `replyIdle` | `approvals` | `modeKnown` |
+| --- | --- | --- | --- | --- |
+| `claude` (Claude Code) | true (Stop hook, `additionalContext`) | `official` (asyncRewake waiter) | true | true |
+| `codex` | true (Stop hook, `decision: block`) | `official` (`codex queue`) | true (PermissionRequest hook) | true |
+| `opencode` | true (its Miblo plugin, at `session.idle`) | `official` (SDK `session.prompt`) | true (SDK permission reply) | false |
+| `copilot` (Copilot CLI) | true (`agentStop`, `decision: block`) | `typing` | false | false |
+| `gemini` (Gemini CLI) | true (`AfterAgent`, `decision: deny`) | `typing` | false | false |
+| `cursor` (its agent) | true (`stop`, `followup_message`) | `typing` | false | false |
+
+- `replyIdle`: `official` (the tool's own way), `typing` (the tool has none: Miblo types the reply
+  into the session's own terminal when it runs in tmux or GNU screen, or the desktop app types it
+  into Terminal or iTerm2 on macOS, below; otherwise the reply goes in at the next turn end),
+  `none`.
+- `modeKnown: false`: the tool's hooks report no permission mode, so replies go there only when the
+  person turned on `miblo plus replies permissive` (refusal `unknown_mode` otherwise).
+- No approvals for Copilot CLI (its hook fires before its own rules: Miblo would ask for calls
+  Copilot allows by itself), Gemini CLI (no hook decides a prompt) or Cursor (Miblo's hook would
+  become the blocker).
+- The desktop app shows this table per tool on its Phone tab (tool · approvals · replies: "no fim
+  da vez" / "também parada" / "parada: digitada no terminal pelo app" / "—").
+
+### 1.24: routing a reply
+
+The bridge verifies a `reply` exactly as before (enrolled phone, MAC, single-use `rt` from the
+session's history frame, fresh nonce, 2 min clock, passkey with user verification over the text,
+permission mode) and then routes it:
+
+1. the session is working and the tool has `replyTurnEnd`: queued; the tool's end-of-turn hook
+   takes it (`reply_ack` `queued` with `how: "turn_end"`, then `sent`, then `delivered`);
+2. idle, `official`: handed to the session's waiter (Claude Code, OpenCode) or to `codex queue`
+   (`sent`, then `delivered`);
+3. idle, `typing`, the session in tmux or screen and the text one line: typed into its terminal
+   after checking it (`sent`, then `delivered`; a failed check falls back to 4);
+4. otherwise: queued for its next turn end (`queued`, `how: "turn_end"`); on macOS the desktop app
+   may take it sooner (below);
+5. a Claude Code session whose hooks predate 1.24: the old channel, as before (`sent` /
+   `delivered` from the transcript).
+
+`reply_ack` (to the phone that sent it):
+
+| `state` | Meaning | Phone text (PT / EN) |
+| --- | --- | --- |
+| `queued` (new), `how: "turn_end"` | waits for the session to finish its turn | "Na fila: entra quando a sessão terminar a vez." / "Queued: goes in when the session finishes its turn." |
+| `sent` | a hook, waiter, `codex queue` or the typing took it | "Enviada" / "Sent" |
+| `delivered` | handed to the tool (or seen in the transcript) | "Entregue" / "Delivered", with how it went in (the `replyHow` the phone saw when sending: "agora" / "no fim da vez") |
+| `refused` | with `reason` (below) | per reason, in plain words |
+
+New refusal reasons: `unsupported` (no reply path for that tool), `idle_unsupported` (idle, no
+path, and no turn end either), `old_session` (Claude Code session started before the update, no
+channel: "Respostas valem para sessões abertas depois da atualização."), `expired` (queued an hour
+and never taken), `session_ended`, `deliver_failed` (`codex queue` failed). `not_claude` and
+`no_channel` are no longer sent by 1.24 bridges (the latter only for an old session whose channel
+went away between checks); the phone keeps their texts for older computers.
+
+### 1.24: history frames (`replyHow`)
+
+`history` (v6) gains `replyHow` next to `reply`: `now` (goes in at once), `turn_end` (goes in when
+the session finishes its turn), or the refusal a reply would get (`unknown_mode`,
+`permissive_session`, `old_session`, `idle_unsupported`, `unsupported`, `off`). `reply` is true for
+`now` and `turn_end`, and `rt` comes with it. A phone that finds no `replyHow` (a computer before
+1.24) keeps the v6 behaviour (replies only in Claude Code, through the channel).
+
+What the phone shows under the reply field, before sending (`SessionReplyCard.tsx`):
+
+| `replyHow` | session state | Line (PT / EN) |
+| --- | --- | --- |
+| `now` | any | "Entra agora." / "Goes in now." |
+| `turn_end` | working | "Entra quando a sessão terminar a vez." / "Goes in when the session finishes its turn." |
+| `turn_end` | idle / done / needs | "Esta IA não recebe respostas parada: entra na próxima vez." / "This AI takes no replies while idle: it goes in next time." |
+| `idle_unsupported` | | no field; "Sessão parada: o {tool} não aceita mensagens de fora enquanto está parado." |
+| `unknown_mode`, `permissive_session` | | no field; the auto-mode text ("Esta sessão roda em modo automático; respostas só em sessões que pedem permissão.") |
+| `old_session` | | no field; "Respostas valem para sessões abertas depois da atualização." |
+| `unsupported` | | no field; "Esta IA não recebe respostas pelo celular." |
+| `off` | | no field; replies are off on the computer (as before) |
+
+There is no "reopen" from the phone: a session that cannot take a reply says why, and nothing is
+closed or restarted for it.
+
+### 1.24: remote tasks take replies
+
+A Claude Code task's `history` frame now carries `reply: true`, `replyHow` (`turn_end` while it
+runs, else `now`) and `rt` once Claude Code reported its session id. The phone sends an ordinary
+`reply` frame with `session` = the task id; the computer verifies it the same way and continues
+the task headless with `claude -p --resume <session>` and the task's flags, under the same time
+limit and "Parar". A reply sent while a run works goes in when that run ends (`queued`); a stop
+drops it (`refused`, `stopped`). Codex and Copilot tasks: `reply: false`, `replyHow:
+"unsupported"`. Refusals add `unsupported`, `busy`, `rate_limited`, `folder_changed`,
+`unknown_tool`, `stopped`.
+
+`miblo plus tasks open <id> [--json]` (the person only, never an AI agent) opens the person's
+terminal running `claude --resume <session>` in the task's folder:
+`{"state":"opened","terminal","session"}` or
+`{"state":"error","error":"agent|unknown_task|not_resumable|folder_changed|no_terminal|failed"}`.
+The desktop app's task cards ("Abrir") run it.
+
+### 1.24: the bridge's local routes (authenticated port)
+
+All behind the bridge key ("The bridge's local port" above: per-request challenge, the answer
+MACed with `x-miblo-resp`):
+
+- `POST /plus/reply/take {session_id, harness}` -> `{messages:[{nonce, text}]}`: the replies queued
+  for that session, handed out once (`sent`). The end-of-turn hook (`bin/reply-hook.js`) and the
+  desktop app's typing.
+- `POST /plus/reply/wait {session_id, waiter, harness}` -> `{messages}` (empty after 25 s: poll
+  again) or `{retire: true}` (a newer waiter, a prompt, a tool call, the end of the session,
+  replies off). The idle waiters (`bin/reply-wait.js`, OpenCode's plugin).
+- `POST /plus/reply/done {nonces}` -> `{ok, n}`: those replies were handed to the tool (`delivered`).
+- `GET /plus/status` adds `capabilities`, `tasks` and `appTyping: [{session, harness, tty, pid}]`:
+  idle sessions of a `typing` tool on macOS without tmux or screen, which only the desktop app can
+  type into; until it does, their replies go in at the turn end.
+- Approvals: `POST /plus/approval` (unchanged) now also comes from Codex's hook and OpenCode's
+  plugin, with `session_id` `codex:<id>` / `opencode:<id>`.
+
+### 1.24: the desktop app types into Terminal or iTerm2 (macOS)
+
+Only the signed desktop app may send Apple Events (the Automation permission, asked by macOS the
+first time; the app explains it once before it ever types). Every few seconds, while replies are
+on and the person has accepted that explanation, the app:
+
+1. reads `GET /plus/status` over the authenticated port (the bridge key in the data folder; the
+   answer is used only when its `x-miblo-resp` verifies) and the sessions of `miblo status`;
+2. for each `appTyping` entry, finds the tracked session with the same `pid`, and goes on only
+   when that session is idle (`idle` or `done`, never `running`, `perm` or `question`) and is of a
+   `typing` tool;
+3. checks with `ps` that the pid's terminal is the entry's `tty` and that the pid leads that
+   terminal's foreground process group (`pgid == tpgid`), and finds the terminal app among the
+   pid's ancestors (Terminal.app or iTerm2; anything else: nothing is typed);
+4. takes the queued replies (`/plus/reply/take` with the session's id), types each one-line text
+   with AppleScript into the tab or session whose tty is that `tty` (Terminal `do script … in`,
+   iTerm2 `write text`; the tty and the text are `osascript` arguments, never part of the script),
+   then `/plus/reply/done` for the ones typed;
+5. shows "Resposta do iPhone digitada na sessão X" in the app and as a system notification.
+
+A reply the app took but could not type (the check failed between the take and the typing, the
+person denied Automation) cannot go back to the queue: the phone stays at "Enviada" and the app
+says so ("Não deu para digitar a resposta na sessão X"). The app never types a text with a line
+break or a control character.
 
 ## Threat model (v6; v7 rows at the end)
 
