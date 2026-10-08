@@ -162,6 +162,59 @@ count: 30 for an IPv6 /64 (60 a /56, 120 a /48) and 300 for an IPv4 address, whi
   slash. Documents get a per-response nonce CSP: `script-src 'self' 'nonce-…'` plus the Turnstile
   host, never `'unsafe-inline'`, and `script-src-attr 'none'`.
 
+### App lock (PIN)
+Every phone that uses the app has a PIN (`app/src/components/phone/AppLock.tsx`, `pin-lock.ts`,
+`idle-lock.ts`, `lock-state.ts`).
+- **When it is asked.** Created right after the account sign-in, before anything else shows (also
+  on a phone that already had pairings from before the lock existed); asked on every open of the
+  app and after the idle time the person chose in Ajustes: 1, 5 (default), 15 or 60 minutes with
+  no touch, tap or key while the app is on screen (time in the background counts), or "Sempre que
+  sair do app" (`visibilitychange` to hidden, `pagehide`). Ajustes changes it (the current PIN
+  first, counted like any attempt) and locks now; it cannot be removed.
+- **Rules.** 6 to 12 digits, digits only; refused when trivial: one digit repeated, a short
+  pattern repeated (121212, 123123, 12341234), a run up or down (123456, 654321, 890123), and a few
+  common picks (112233, 123321, ...).
+- **Storage.** The PIN never leaves the phone and is never written anywhere. The app keeps
+  PBKDF2-SHA-256 of it (a random 16-byte salt per device, at least 600 000 iterations, more on a
+  device that runs that in under ~300 ms; the count is stored with the hash) in the app's
+  IndexedDB `miblo-phone` (store `lock`, version 3), next to the pairings, with the wrong-PIN count,
+  the wait's end and the idle choice. Compared in constant time. The fields are
+  `type=password`, `inputmode=numeric`, `autocomplete=off`. Signing out of the account (which wipes
+  the app's storage) or another account signing in deletes it: the next sign-in creates a new PIN.
+- **Wrong PINs.** Each attempt is counted in storage before the check finishes (closing the tab or
+  reloading mid-check does not undo it). 5 wrong in a row: no attempt for 1 minute (countdown on
+  the screen). 10 wrong in a row (the minute does not reset the count; a reload does not either):
+  the app is **blocked on this phone**: the PIN hash is deleted (nothing on the phone opens with
+  the PIN any more), the app posts the existing sign-out route
+  `POST /api/community/auth/logout` with `{"reason":"pin_lockout"}` (retried every 30 s and when
+  the phone is back online until the server answers), which ends this browser's account session
+  on the server and records the `pin_lockout` security event (miblo.ai e-mails it, at most one an
+  hour per account; a self-hosted relay writes it to its log as an `account_security` line). The screen says "Este celular foi bloqueado por PIN errado.
+  Entre de novo na sua conta (digital/rosto ou app autenticador) para desbloquear". Unblocking is
+  a normal account sign-in with the account's second factor, seen by the app only after the
+  sign-out succeeded (a session from before cannot count), then a new PIN before the app opens. A
+  right PIN sets the count back to zero.
+- **What locked means.** While locked (or blocked, or before the PIN exists) the app renders only
+  the lock screen: nothing read from the phone's storage or received from a computer (sessions,
+  approvals, replies, confirmations, codes, computer names) is on screen. The functions that act
+  refuse too, whatever the screen shows: `RelayClient.sendUp` (approvals, confirmations, replies,
+  tasks, stop, history requests) and `answerCode`, `confirmComputer`, `rejectComputer`, `askAgain`,
+  `sendSasAnswers` (answered again on the next poll) and pairing again. The tab title and the app
+  icon carry no count while locked. The
+  relay connections stay open meanwhile, so an approval that arrives while locked is there after
+  the PIN (kept in memory only, as before).
+- **What it is not.** A gate on the app and the session, not encryption: the pairing keys stay
+  non-extractable CryptoKeys exactly as before, not wrapped by the PIN. Someone who can read the
+  browser's storage (a forensic copy of the phone, malware, devtools on an unlocked device) can
+  try all 10^6 six-digit PINs against the stored hash offline in hours or less, or simply ignore
+  the lock and use the keys. The PIN stops a person holding the unlocked phone from using the app
+  and its session; the device's own screen lock and encryption stay the protection against a
+  forensic attacker. The 1-minute wait follows the phone's clock (changing the clock shortens it;
+  the 10-attempt limit does not depend on the clock). Web Push alerts keep arriving while locked
+  (they are generic and never carry content).
+- **Privacy.** Nothing of the PIN, its hash or the count is sent anywhere; the only network effect
+  is the sign-out after 10 wrong PINs (and its `pin_lockout` notice).
+
 ## Privacy
 - No IPs or contents stored by the relay (Cloudflare's Workers Logs, while on, record each request's
   URL, with the room id, and IP for a few days: docs/data-inventory.md, section 6). A free room is
@@ -998,6 +1051,7 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | The server grinds the phone's code by flooding it with commitments of invented computers (v6, audit round 2) | the phone answers at most 3 new rounds an hour and one open round per computer, then warns ("Muitas tentativas de parear"); the computer opens at most 3 rounds per phone an hour and reveals its nonce once per round; the "Novo computador" card only for a code shown in the last 30 minutes whose computer did not refuse it | web `phone-grind.test.ts` (from the audit's `grind.test.ts`), plugin `phone-trust.test.js` |
 | The server seals a grant of its own to the phone's key (a room, keys and MAC key it chose, any generation) (v6, audit finding 2; the audit's `forge.test.ts`) | every grant is signed with the computer's ECDSA identity key; the phone opens only grants signed by a computer it confirmed (pinned after it showed that computer's code and the person tapped "Sim, fui eu"), never an unsigned one, a copied signature or an unknown key; a room another key holds is never taken over; generations only move forward | plugin `phone-trust.test.js`, web `phone-trust.test.ts` (forged grant refused), e2e (new computer confirmed on the phone) |
 | Another person signs in to miblo.ai in the same browser (or the owner signs out) and finds the previous account's pairings (v6, audit finding 3) | pairings carry the account uid and show only for it; signed out they are hidden; another account signing in deletes the previous one's pairings, keys and identities; signing out wipes the app's IndexedDB and storage | web `phone-trust.test.ts` (pairingsFor) |
+| Someone holding the owner's unlocked phone opens the app and approves, replies, confirms a change or reads the sessions | the app lock (PIN): mandatory, asked on every open and after the idle time; nothing rendered and nothing sent while locked (`sendUp`, `answerCode`, `confirmComputer`, `askAgain` and the pairing answers check it, not only the screen); 5 wrong: 1-minute wait; 10 wrong (persisted across reloads): blocked on the phone, PIN hash deleted, account session ended on the server, `pin_lockout` notice (a log line on a self-hosted relay); back only by a full sign-in with the second factor and a new PIN. Residual: an attacker who reads the browser storage can brute-force the PIN offline or use the keys directly (it is not encryption) | web `pin-lock.test.ts` (rules, counters, reload, idle, send gates), `pin-lockout.test.ts` (sign-out route, notice once an hour, cross-site refused) |
 | **Residual: the phone app's code is served by miblo.ai and trusted.** Whoever controls what miblo.ai serves (a compromised deploy, dependency or account on the hosting) runs code with the phone's keys: it can show a fake code, confirm a computer of its own, swap what one biometric signs, or read what the app decrypts while open | not preventable while the app is a web page (long term: an installed app with pinned code). What bounds it: the server alone (no code change) is held off by the code and the signed grants above; a code-level compromise still cannot act on the computer without the person's passkey for each action, cannot let a phone in without the person typing a code at the computer, and every allow, reply and task is shown on the computer (gadget, notification, audit log with the computer's own summary); approvals, replies and tasks are off until turned on at the desk with the gadget code; a strict CSP (scripts only from the site with a per-response nonce, plus Cloudflare's Turnstile and analytics; no inline handlers); the phone's private keys non-extractable CryptoKeys; the e2e check fails on any CSP violation | web `hardening.test.ts`, `scripts/plus-e2e.mjs` (CSP), plugin `plus.test.js` |
 | A program on the computer edits `plus.json` to turn on approvals, replies or tasks, or adds a folder (audit finding 6) | the widening settings count only under an HMAC keyed by `plus-settings.key` (0600); an unsigned, edited or pre-1.21 file reads with all of them off until the person turns them on again with the gadget code (deleting the key never re-arms it); folders are checked again on every read (real path, directory, id, never the disk, home or above, a hidden home folder, app data such as `~/Library` or `%APPDATA%`, or a system tree), and a folder swapped between that check and the start of a task kills it at once. Residual: a process with the user's rights that reads the key; the few milliseconds between the start and the second check | plugin `plus-config-integrity.test.js` |
 | The account server names a hostile page as the device-link page (audit finding 7) | only an https page on the account's exact origin is shown or opened, else the link page itself; the browser is opened without a shell (Windows: url.dll's handler, never `cmd /c start`) | plugin `open-url.test.js` |

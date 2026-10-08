@@ -77,13 +77,17 @@ export function plusReady(p: StoredPairing, phones: string[] | null | undefined)
 const DB_NAME = "miblo-phone";
 const STORE = "pairings";
 const IDENTITY = "identity";
+/** The app lock (PIN hash, wrong-PIN counter, idle choice): one record, key LOCK_KEY (pin-lock.ts). */
+const LOCK = "lock";
+const LOCK_KEY = "device";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 2);
+    const req = indexedDB.open(DB_NAME, 3);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: "room" });
       if (!req.result.objectStoreNames.contains(IDENTITY)) req.result.createObjectStore(IDENTITY, { keyPath: "uid" });
+      if (!req.result.objectStoreNames.contains(LOCK)) req.result.createObjectStore(LOCK);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -213,4 +217,37 @@ export async function savePairingFromGrant(
 /** Every account identity kept in this browser (one per account that joined here). */
 export async function listIdentities(): Promise<AccountIdentity[]> {
   return run<AccountIdentity[]>("readonly", (s) => s.getAll() as IDBRequest<AccountIdentity[]>, IDENTITY);
+}
+
+// --- the app lock's record (pin-lock.ts) ---------------------------------------------------------
+
+export async function readLockRecord(): Promise<unknown> {
+  return run<unknown>("readonly", (s) => s.get(LOCK_KEY), LOCK);
+}
+
+/** Reads, changes and writes the lock record in one transaction (two tabs cannot both pass a check). */
+export async function updateLockRecord<T>(fn: (current: unknown) => T): Promise<T> {
+  const db = await openDb();
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const tx = db.transaction(LOCK, "readwrite");
+      const store = tx.objectStore(LOCK);
+      let next: T;
+      const get = store.get(LOCK_KEY);
+      get.onsuccess = () => {
+        try {
+          next = fn(get.result);
+          store.put(next, LOCK_KEY);
+        } catch (e) {
+          tx.abort();
+          reject(e);
+        }
+      };
+      tx.oncomplete = () => resolve(next);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
 }

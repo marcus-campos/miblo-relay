@@ -136,7 +136,12 @@ const ROUTES: Route[] = [
     const blocked = crossSiteError(request);
     if (blocked) return blocked;
     const session = await sessionFromCookie(scope, request.headers.get("cookie"), { allowPending: true });
-    if (session) await revokeSession(scope, session.idHash);
+    if (session) {
+      // The phone app blocked after 10 wrong PINs (app/src/components/phone/AppLock.tsx): logged as
+      // an account_security line like the other notices (a self-hosted relay sends no e-mail).
+      if ((await reasonOf(request)) === "pin_lockout") await notify(scope, session, "pin_lockout");
+      await revokeSession(scope, session.idHash);
+    }
     return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(publicOrigin(scope.env)!.origin) });
   }),
   route("POST", "/api/community/account/password", async (scope, request) => {
@@ -500,4 +505,14 @@ export async function handleApi(scope: RequestScope, request: Request): Promise<
     }
   }
   return pathMatched ? error("method_not_allowed", 405) : error("not_found", 404);
+}
+
+/** The sign-out's optional reason (`{"reason":"pin_lockout"}`), or null. */
+async function reasonOf(request: Request): Promise<string | null> {
+  try {
+    const body = (await request.json()) as { reason?: unknown } | null;
+    return typeof body?.reason === "string" ? body.reason : null;
+  } catch {
+    return null;
+  }
 }

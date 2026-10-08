@@ -9,6 +9,7 @@ import { call } from "@/components/community/security";
 import { b64url, computerFingerprint, openGrant, phoneRegChallenge, randomNonce, sasCode, sasCommit, verifyGrantSig, type Grant } from "@/lib/relay-crypto";
 import { assertAnyPhonePasskey, assertPhonePasskey, createPhonePasskey, rpIdFor, type Assertion } from "@/lib/webauthn";
 import { confOf, pakeChallenge, phoneAnswer, phoneReuseChallenge, sidOf } from "@/lib/pake";
+import { AppLockedError, isAppLocked } from "./lock-state";
 import { listPairings, saveIdentity, savePairingFromGrant, type AccountIdentity, type PakeRun, type Pin, type SasRound, type StoredPairing } from "./store";
 
 export type { Pin, SasRound };
@@ -91,6 +92,7 @@ export function waitingFor(requests: RequestRow[], now: number): Waiting {
 
 /** Asks the account's computers again after a request expired (each asks the person there again). */
 export async function askAgain(csrf: string, phone: string): Promise<boolean> {
+  if (isAppLocked()) return false;
   const r = await call(`/api/phones/${phone}/again`, {}, csrf);
   return r.status === 200;
 }
@@ -230,6 +232,8 @@ export async function sasStep(me: { id: string; pub: string }, rounds: SasRound[
 
 /** Sends this phone's nonces to the account (each answer once per round; the same answer again is fine). */
 export async function sendSasAnswers(csrf: string, phone: string, answers: SasStep["answers"]): Promise<void> {
+  // Not while the app is locked (PIN): the open rounds are answered again on the next poll.
+  if (isAppLocked()) return;
   for (const a of answers) await call(`/api/phones/${phone}/sas`, a, csrf).catch(() => null);
 }
 
@@ -260,7 +264,8 @@ export type PakeSend = "ok" | "cancelled" | "error" | "gone";
 export async function answerCode(csrf: string, me: AccountIdentity, q: RequestRow, code: string, deps: { post?: typeof call; assert?: typeof assertPhonePasskey } = {}): Promise<{ result: PakeSend; me: AccountIdentity }> {
   const post = deps.post ?? call;
   const assert = deps.assert ?? assertPhonePasskey;
-  if (!q.pake || !q.cpub || !/^\d{6}$/.test(code)) return { result: "error", me };
+  // Never while the app is locked (PIN), whatever the screen shows.
+  if (isAppLocked() || !q.pake || !q.cpub || !/^\d{6}$/.test(code)) return { result: "error", me };
   const sid = sidOf({ phone: me.id, pub: me.pub, cpub: q.cpub, n: q.pake.n, rs: q.pake.rs });
   const ans = await phoneAnswer(code, sid, q.pake.ya);
   let wa: Assertion | undefined;
@@ -276,6 +281,7 @@ export async function answerCode(csrf: string, me: AccountIdentity, q: RequestRo
   // read late still pins (pinByCode checks no age either).
   const next = { ...me, pakes: [...(me.pakes ?? []).filter((x) => x.cpub !== q.cpub), run].slice(-8) };
   await saveIdentity(next);
+  if (isAppLocked()) return { result: "error", me: next };
   const r = await post(`/api/phones/${me.id}/pake`, { device: q.device.id, n: q.pake.n, ya: q.pake.ya, yb: ans.yb, tag: ans.tag, ...(wa ? { wa } : {}) }, csrf);
   return { result: r.status === 200 ? "ok" : r.status === 404 || r.status === 409 ? "gone" : "error", me: next };
 }
@@ -309,6 +315,7 @@ export function pairingsFor(all: StoredPairing[], uid: string | null): { keep: S
 
 /** The person confirmed on the phone that they typed this computer's code there: pinned. */
 export async function confirmComputer(me: AccountIdentity, c: { cpub: string; device: string; name: string }): Promise<AccountIdentity> {
+  if (isAppLocked()) throw new AppLockedError();
   const pins = [...(me.pins ?? []).filter((p) => p.cpub !== c.cpub), { cpub: c.cpub, device: c.device, name: c.name.slice(0, 40), at: Date.now() }];
   const next = { ...me, pins };
   await saveIdentity(next);
@@ -317,6 +324,7 @@ export async function confirmComputer(me: AccountIdentity, c: { cpub: string; de
 
 /** A computer the person turned down on the phone: its rounds are forgotten (its grants stay refused). */
 export async function rejectComputer(me: AccountIdentity, cpub: string): Promise<AccountIdentity> {
+  if (isAppLocked()) throw new AppLockedError();
   const next = { ...me, rounds: (me.rounds ?? []).filter((r) => r.cpub !== cpub) };
   await saveIdentity(next);
   return next;

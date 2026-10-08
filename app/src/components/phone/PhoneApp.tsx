@@ -97,6 +97,8 @@ import {
 } from "./app-model";
 import { CatEyes, Group, Icon, Notice, PixelCube, Steps, TabBar, Tech, TopBar, type AccountLinks } from "./AppParts";
 import { phoneStrings, type PhoneStrings } from "./strings";
+import { LockScreen, LockSettings, useAppLock } from "./AppLock";
+import { isAppLocked } from "./lock-state";
 import styles from "./phone.module.css";
 
 type Live = { link: LinkState; snap: SnapshotView | null };
@@ -270,6 +272,9 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   const [grantIssue, setGrantIssue] = useState<GrantIssue | null>(null);
   /** Computers whose code this phone showed and that granted it: the person confirms them here. */
   const [toConfirm, setToConfirm] = useState<ShownCode[]>([]);
+  // The PIN lock (AppLock.tsx): nothing below shows until it is open.
+  const lock = useAppLock(join.k === "join" || join.k === "ready" ? "in" : join.k === "loading" ? "unknown" : "out", !!pairings?.length);
+  const refreshLock = lock.refresh;
 
   const say = useCallback((message: string) => {
     setToast(message);
@@ -343,7 +348,11 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       const here = await listPairings().catch(() => [] as StoredPairing[]);
       const others = (await listIdentities().catch(() => [] as AccountIdentity[])).filter((x) => x.uid !== acct.uid);
       if (pairingsFor(here, acct.uid).wipe || others.length) {
-        if (lastUid() && lastUid() !== acct.uid) await wipePhoneData();
+        if (lastUid() && lastUid() !== acct.uid) {
+          // The lock record went with the rest: the new account creates its own PIN.
+          await wipePhoneData();
+          await refreshLock();
+        }
         else {
           for (const p of here) if (p.acct?.uid !== acct.uid) await removePairing(p.room).catch(() => {});
           for (const x of others) await deleteIdentity(x.uid).catch(() => {});
@@ -396,7 +405,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     return () => {
       alive = false;
     };
-  }, [joinTick, say, t]);
+  }, [joinTick, say, t, refreshLock]);
   const hasPairings = !!pairings?.length;
   // Waiting for a computer's next step (no computer let this phone in yet, or one is asking the
   // person): a long poll, so its commitment, its nonce (the code) and its grant show at once.
@@ -862,7 +871,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     return r?.caps?.on ? pendingApprovals(r.approvals, r.outcomes, now).length : 0;
   };
   const pendingTotal = all.reduce((n, p) => n + pendingOf(p.room), 0);
-  const badge = all.reduce((n, p) => n + attentionCount(live[p.room]?.snap?.sessions, pendingOf(p.room)), 0);
+  // Nothing of the sessions while the app is locked (PIN), not even a count in the title or icon.
+  const badge = lock.k !== "open" ? 0 : all.reduce((n, p) => n + attentionCount(live[p.room]?.snap?.sessions, pendingOf(p.room)), 0);
 
   // The installed app's icon and the tab title carry the same count.
   useEffect(() => {
@@ -899,6 +909,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       {toast && <span>{toast}</span>}
     </div>
   );
+
+  if (lock.k !== "open") return <LockScreen lang={lang} lock={lock} />;
 
   // --- a conversation (Miblo+): its own screen ------------------------------------------------
   const room = current ? plus[current.room] : undefined;
@@ -1005,7 +1017,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   // phone's identity go (the identity's account entry too when no other computer uses it), and the
   // join card asks to join again; the computer then shows a new code to type here.
   const pairAgain = async () => {
-    if (repair === "busy") return;
+    if (repair === "busy" || isAppLocked()) return;
     setRepair("busy");
     try {
       const room = current.room;
@@ -1262,6 +1274,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
           {t.manageDevices}
         </a>
       </Group>
+
+      <LockSettings lang={lang} lock={lock} />
 
       <Group title={t.notify.title} id="notify-title">
         <AlertsBlock t={t} state={notify} device={device} hint={hint} onEnable={enableAlerts} onInstall={install} />

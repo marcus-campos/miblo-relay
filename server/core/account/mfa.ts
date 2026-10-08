@@ -545,7 +545,7 @@ export async function spendRecoveryCode(scope: RequestScope, session: Session, c
 
 // --- notices -----------------------------------------------------------------------------------
 
-export type SecurityEvent = "passkey_added" | "passkey_removed" | "totp_added" | "totp_removed" | "recovery_generated" | "recovery_used" | "computer_linked" | "phone_added" | "phone_revoked";
+export type SecurityEvent = "passkey_added" | "passkey_removed" | "totp_added" | "totp_removed" | "recovery_generated" | "recovery_used" | "computer_linked" | "phone_added" | "phone_revoked" | "pin_lockout";
 
 /**
  * A security event. A self-hosted server sends no email: it logs the event's name (never a secret,

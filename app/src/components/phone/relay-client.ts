@@ -8,6 +8,7 @@
 // guest: the status, plus the answer to its enrollment, which travels under the pairing window's
 // key (sendEnroll / openEnrolled).
 import { decryptFrame, enrollKey, openEnrolled, openSealed, phoneFrameKey, readerToken, sealEnroll, sealUp, type Frame } from "@/lib/relay-crypto";
+import { isAppLocked } from "./lock-state";
 import type { StoredPairing } from "./store";
 
 /**
@@ -98,10 +99,13 @@ export class RelayClient {
   /**
    * Miblo+: a frame to the computer, sealed under this phone's own key ({"t":"up","ch",iv,ct}; the
    * relay adds which phone sent it). False when the socket is not open or this phone has no
-   * identity for this computer (not enrolled).
+   * identity for this computer (not enrolled), and while the app is locked (PIN): nothing is sent
+   * to a computer then, whatever the screen shows.
    */
   async sendUp(ch: "history" | "reply" | "approval", payload: unknown): Promise<boolean> {
+    if (isAppLocked()) return false;
     return this.spaced(async () => {
+      if (isAppLocked()) return null;
       const id = await this.identity;
       if (!id || this.guest) return null;
       return sealUp(id.key, this.pairing.room, id.phone, ch, payload);

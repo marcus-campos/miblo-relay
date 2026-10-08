@@ -150,6 +150,11 @@ Same as a malicious miblo.ai, against the same defenses:
 - **One process, in-memory limits (Node); per-isolate limits (Cloudflare without a rate-limit
   binding).** Enough for one person; a flood can still cost you bandwidth.
 - **No security e-mails:** a self-hosted server sends none: the notices the miblo.ai account e-mails (recovery code used or tried, new passkey, new phone) are only written to the server log as `{"event":"account_security"}` lines; watch the account page and that log.
+- **The phone app's PIN is a gate, not encryption:** the app asks for a PIN (mandatory; 10 wrong
+  ones end the session through this server's own sign-out and log a `pin_lockout` line), but the
+  pairing keys in the browser are not wrapped by it; someone who can read the browser's storage can
+  guess a 6-digit PIN offline or use the keys directly. The phone's own screen lock and encryption
+  remain the protection against that (protocol.md, "App lock (PIN)").
 - **Updates are yours:** a self-hosted server does not update itself. Watch the repository's
   releases (security fixes are marked).
 - **The plugin still reads its signed release manifest from miblo.ai** (update checks), whatever
