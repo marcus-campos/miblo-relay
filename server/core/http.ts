@@ -116,39 +116,81 @@ export function clientIp(request: Request): string {
 }
 
 // The rate limiter: a fixed window per key, in memory.
-const windows = new Map<string, { start: number; count: number }>();
-/** How many keys the limiter keeps (each a few dozen bytes). */
+//
+// Three tables, so a flood of one kind of key never crowds out another (security audit 2026-10-08
+// R1: one IPv6 /48 sending each request from a new /64 filled the single table in under a second,
+// and every new key, the owner's sign-in and the linked computer's calls included, was refused):
+// - principals: an account or a linked computer (keys made only after authentication);
+// - networks: an anonymous caller's network (an IPv6 /64 or an IPv4 address);
+// - wide networks: the IPv6 /48 or IPv4 /24 around it, counted first with WIDE_FACTOR times the
+//   allowance. Filling it would take thousands of /48s or /24s.
+// Each table still fails closed when it is full of live counts (a flood never resets a count). A
+// network whose own key cannot be added while the networks table is full is held to its wide
+// network's count instead.
+type Window = { start: number; count: number };
+const windows = new Map<string, Window>();
+const networks = new Map<string, Window>();
+const wides = new Map<string, Window>();
+/** How many keys each table keeps (each a few dozen bytes). */
 export const LIMIT_KEYS = 5000;
+/** A wide network (IPv6 /48, IPv4 /24) gets this many times a single network's allowance. */
+export const WIDE_FACTOR = 8;
 
 /** Forgets every count (tests). */
 export function resetLimits(): void {
   windows.clear();
+  networks.clear();
+  wides.clear();
 }
 
-export function memoryLimit(key: string, limit: number, periodMs = 60_000, now = Date.now()): boolean {
-  const w = windows.get(key);
+/** One request for `key` in `table`: within its limit, over it, or refused because the table is full. */
+function count(table: Map<string, Window>, key: string, limit: number, periodMs: number, now: number): "ok" | "over" | "full" {
+  const w = table.get(key);
   if (!w || now - w.start >= periodMs) {
     // Fails closed: a live count is never dropped to make room (a flood of new keys would reset
     // everyone's, the attacker's included). Expired windows go; while the table is still full of
     // live ones, a new key is refused until some expire.
-    if (windows.size >= LIMIT_KEYS) {
-      for (const [k, v] of windows) if (now - v.start >= periodMs) windows.delete(k);
-      if (windows.size >= LIMIT_KEYS) return false;
+    if (table.size >= LIMIT_KEYS) {
+      for (const [k, v] of table) if (now - v.start >= periodMs) table.delete(k);
+      if (table.size >= LIMIT_KEYS) return "full";
     }
-    windows.set(key, { start: now, count: 1 });
-    return true;
+    table.set(key, { start: now, count: 1 });
+    return "ok";
   }
   w.count += 1;
-  return w.count <= limit;
+  return w.count <= limit ? "ok" : "over";
+}
+
+export function memoryLimit(key: string, limit: number, periodMs = 60_000, now = Date.now()): boolean {
+  return count(windows, key, limit, periodMs, now) === "ok";
 }
 
 /**
- * True when `key` is over `limit` requests a minute. In memory: exact on Node (one process), per
- * isolate on Cloudflare Workers (a single-person server never comes near these limits; they only
- * slow down guessing and floods).
+ * True when `key` is over `limit` requests a minute. For keys of an account or a linked computer;
+ * an anonymous caller's network goes through limitedNetwork. In memory: exact on Node (one
+ * process), per isolate on Cloudflare Workers (a single-person server never comes near these
+ * limits; they only slow down guessing and floods).
  */
 export function limited(key: string, limit: number, periodMs = 60_000): boolean {
   return !memoryLimit(key, limit, periodMs);
+}
+
+/** The wide network around an address: IPv6 /48, IPv4 /24 (unparseable input as is). */
+export function wideNetwork(ip: string): string {
+  const v = ip.trim().toLowerCase();
+  if (isIpv6(v)) return clientNetwork(v, 48);
+  const n = clientNetwork(v);
+  const m = /^(\d+)\.(\d+)\.(\d+)\.\d+$/.exec(n);
+  return m ? `${m[1]}.${m[2]}.${m[3]}.0/24` : n;
+}
+
+/**
+ * True when the caller at `ip` is over `limit` requests a minute for `bucket`: its wide network
+ * first (WIDE_FACTOR x limit), then its own network (clientNetwork). See the tables above.
+ */
+export function limitedNetwork(bucket: string, ip: string, limit: number, periodMs = 60_000, now = Date.now()): boolean {
+  if (count(wides, `${bucket}|${wideNetwork(ip)}`, limit * WIDE_FACTOR, periodMs, now) !== "ok") return true;
+  return count(networks, `${bucket}:${clientNetwork(ip)}`, limit, periodMs, now) === "over";
 }
 
 export function tooMany(): Response {

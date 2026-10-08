@@ -3,7 +3,7 @@
 // Adapted from the miblo.ai account routes.
 import type { z } from "zod";
 import type { RequestScope } from "./env";
-import { clientIp, clientNetwork, error, limited, readJson, tooMany } from "./http";
+import { clientIp, error, limited, limitedNetwork, readJson, tooMany } from "./http";
 import { csrfValid, sessionFromCookie, type Session } from "./account/sessions";
 import { MFA_FRESH_MS, MFA_SESSION_MS } from "./account/mfa-policy";
 import { sessionSecret } from "./crypto";
@@ -55,7 +55,7 @@ export function accountActionLimited(userId: string, action: string): boolean {
 /** The second-factor routes: per-IP and per-account limits, and what the session needs for this step. */
 export type MfaStep = "verify" | "setup" | "session" | "fresh";
 export async function mfaRequest<S extends z.ZodType>(scope: RequestScope, request: Request, schema: S, step: MfaStep): Promise<MemberRequest<z.infer<S>>> {
-  if (limited(`mfa:${clientNetwork(clientIp(request))}`, 30)) return { ok: false, response: tooMany() };
+  if (limitedNetwork("mfa", clientIp(request), 30)) return { ok: false, response: tooMany() };
   const r = await memberRequest(scope, request, schema, { allowPending: step === "verify" });
   if (!r.ok) return r;
   if (limited(`mfa-user:${r.session.user.id}`, 20)) return { ok: false, response: tooMany() };
@@ -90,7 +90,7 @@ export async function deviceRequest<S extends z.ZodType>(scope: RequestScope, re
 /** The device flow's start and poll: anonymous, limited per network (polls every 5 s, starts are rare). */
 export async function anonymousRequest<S extends z.ZodType>(scope: RequestScope, request: Request, schema: S, bucket: "start" | "poll"): Promise<{ ok: true; data: z.infer<S> } | { ok: false; response: Response }> {
   if (!sessionSecret(scope)) return { ok: false, response: error("unavailable", 503) };
-  if (limited(`${bucket}:${clientNetwork(clientIp(request))}`, bucket === "start" ? 6 : 30)) return { ok: false, response: tooMany() };
+  if (limitedNetwork(bucket, clientIp(request), bucket === "start" ? 6 : 30)) return { ok: false, response: tooMany() };
   const parsed = await readJson(request, schema);
   if (!parsed.ok) return parsed;
   return { ok: true, data: parsed.data };

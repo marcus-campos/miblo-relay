@@ -10,7 +10,7 @@
 // Everything else is the phone app and the account page (static files, served by the runtime).
 import type { z } from "zod";
 import type { RequestScope } from "./env";
-import { error, json, readJson, crossSiteError, clientIp, clientNetwork, limited, tooMany } from "./http";
+import { error, json, readJson, crossSiteError, clientIp, clientNetwork, limited, limitedNetwork, tooMany } from "./http";
 import { handleRelay } from "./relay/router";
 import { publicOrigin } from "./config";
 import { identityDocument, signIdentity } from "./identity";
@@ -79,7 +79,7 @@ const ROUTES: Route[] = [
     return json(await identityDocument(scope.env.SERVER_IDENTITY_KEY, o.origin), 200, { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" });
   }),
   route("POST", "/api/server/identity", async (scope, request) => {
-    if (limited(`identity:${clientNetwork(clientIp(request))}`, 60)) return tooMany();
+    if (limitedNetwork("identity", clientIp(request), 60)) return tooMany();
     // A plain JSON call from the plugin (Node): no cookies, no CSRF; nothing here is secret.
     let data: unknown;
     try {
@@ -96,7 +96,7 @@ const ROUTES: Route[] = [
   // --- setup and signing in ---
   route("GET", "/api/setup", async (scope) => json({ needed: await setupNeeded(scope), available: !!scope.env.SETUP_TOKEN, used: !!scope.env.SETUP_TOKEN && (await setupTokenUsed(scope, scope.env.SETUP_TOKEN)) })),
   route("POST", "/api/setup", async (scope, request) => {
-    if (limited(`setup:${clientNetwork(clientIp(request))}`, 5)) return tooMany();
+    if (limitedNetwork("setup", clientIp(request), 5)) return tooMany();
     const p = await body(request, S.setupSchema);
     if (!p.ok) return p.response;
     const out = await runSetup(scope, p.data);
@@ -105,7 +105,7 @@ const ROUTES: Route[] = [
     return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(cookie, publicOrigin(scope.env)!.origin) });
   }),
   route("POST", "/api/community/auth/password", async (scope, request) => {
-    if (limited(`signin:${clientNetwork(clientIp(request))}`, 10)) return tooMany();
+    if (limitedNetwork("signin", clientIp(request), 10)) return tooMany();
     const p = await body(request, S.passwordSignInSchema);
     if (!p.ok) return p.response;
     const out = await passwordSignIn(scope, p.data.username, p.data.password, clientNetwork(clientIp(request)));
@@ -114,7 +114,7 @@ const ROUTES: Route[] = [
     return json({ ok: true, next: "mfa" }, 200, { "Set-Cookie": sessionCookie(cookie, publicOrigin(scope.env)!.origin) });
   }),
   route("POST", "/api/community/auth/passkey/options", async (scope, request) => {
-    if (limited(`signin:${clientNetwork(clientIp(request))}`, 10)) return tooMany();
+    if (limitedNetwork("signin", clientIp(request), 10)) return tooMany();
     const blocked = crossSiteError(request);
     if (blocked) return blocked;
     const rp = relyingParty(scope);
@@ -122,7 +122,7 @@ const ROUTES: Route[] = [
     return json(await signInOptions(scope, rp));
   }),
   route("POST", "/api/community/auth/passkey/verify", async (scope, request) => {
-    if (limited(`signin:${clientNetwork(clientIp(request))}`, 10)) return tooMany();
+    if (limitedNetwork("signin", clientIp(request), 10)) return tooMany();
     const p = await body(request, S.passkeySignInSchema);
     if (!p.ok) return p.response;
     const rp = relyingParty(scope);

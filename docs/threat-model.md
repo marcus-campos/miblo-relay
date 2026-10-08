@@ -87,8 +87,11 @@ Same as a malicious miblo.ai, against the same defenses:
   factor for 15 minutes (counted atomically per account, whatever arrives in parallel). A wrong
   name, a wrong password and a locked network get the same 401 after the same work. Passwords are
   PBKDF2-SHA-256 with 600,000 iterations on Node and 100,000 on Cloudflare (a Worker's ceiling);
-  older hashes are redone at sign-in. The in-memory rate limiter fails closed: when its table is
-  full of live counts, a new key is refused rather than an old count dropped.
+  older hashes are redone at sign-in. The in-memory rate limiter fails closed: when a table is
+  full of live counts, a new key is refused rather than an old count dropped. Accounts and linked
+  computers, anonymous networks and their wide networks (IPv6 /48, IPv4 /24, counted first with 8
+  times the allowance) have separate tables, so a flood from one /48 using a new /64 for every
+  request neither locks the owner out nor stops the linked computer (audit 2026-10-08 R1).
 - **Second factors:** removing one is a single statement that also checks another factor stays, so
   parallel removals can never leave the account without a second factor.
 - **CSRF / cross-site:** JSON-only writes, `Sec-Fetch-Site` and `Origin` checks, a per-session CSRF

@@ -4,7 +4,7 @@
 //                                        (the writer adds X-Read-Hash: base64url(SHA-256(readToken)))
 //   DELETE /api/relay/<room>          -> wipes the room (Authorization: Bearer <writeToken>)
 import { bearerToken, isRole, isRoom } from "./protocol";
-import { clientNetwork, isIpv6, limited } from "../http";
+import { clientNetwork, isIpv6, limitedNetwork } from "../http";
 import type { RelayEnv } from "./room";
 import type { RoomNamespace } from "../env";
 
@@ -73,10 +73,10 @@ export async function handleRelay(request: Request, env: RelayRouterEnv): Promis
   }
 
   {
-    // An IPv6 host counts by its /64: it could pick a new address for every request.
-    const ip = clientNetwork(request.headers.get("CF-Connecting-IP") ?? "unknown");
-    // Per-IP limit on upgrades and deletes. The IP is only the limiter key, never stored.
-    if (limited(`relay:${ip}`, Number(env.RELAY_RATE_LIMIT) || 30)) return json({ error: "rate_limited" }, 429, { "Retry-After": "60" });
+    // Per network (an IPv6 host by its /64, within its /48) on upgrades and deletes. The IP is
+    // only the limiter key, never stored.
+    const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    if (limitedNetwork("relay", ip, Number(env.RELAY_RATE_LIMIT) || 30)) return json({ error: "rate_limited" }, 429, { "Retry-After": "60" });
   }
 
   // Only what the room needs travels on: the role, the bearer token, the writer's read-token hash
