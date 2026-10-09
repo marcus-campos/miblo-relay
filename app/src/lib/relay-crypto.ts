@@ -266,6 +266,18 @@ export function stopMacText(room: string, f: StopFields): string {
   return ["miblo-stop-v6", room, f.phone, f.task, f.nonce, String(f.ts)].join("|");
 }
 
+/**
+ * The panic button (plugin lib/plus/panic.js): the phone's MAC and its passkey's challenge bind the
+ * room, the phone, a fresh nonce and the phone's time. Checked on the computer exactly like a reply.
+ */
+export type PanicFields = { phone: string; nonce: string; ts: number };
+export function panicMacText(room: string, f: PanicFields): string {
+  return ["miblo-panic-v8", room, f.phone, f.nonce, String(f.ts)].join("|");
+}
+export function panicChallenge(room: string, f: PanicFields): Promise<Uint8Array<ArrayBuffer>> {
+  return sha256Bytes(`miblo-panic-wa-v8|${room}|${f.phone}|${f.nonce}|${f.ts}`);
+}
+
 /** A pairing a computer sealed to this phone's ECDH key (stored by the account, opened only here). */
 export type Grant = { room: string; epoch: number; epk: string; iv: string; ct: string };
 /** `conf` (v7): the computer's confirmation of the code exchange this phone ran with it; pinByCode (account-join.ts) pins that computer with it. */

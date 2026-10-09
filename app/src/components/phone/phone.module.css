@@ -2257,3 +2257,48 @@ div.toolCard {
   font-size: 0.8125rem;
   color: var(--ink-2);
 }
+
+/* The panic button (PanicButton.tsx): red, filled from the left while it is held for 2 s. */
+.panicCard {
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.panicButton {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 3.25rem;
+  border-radius: 14px;
+  border: 2px solid var(--red-ink);
+  background: color-mix(in oklab, var(--red) 14%, var(--surface));
+  color: var(--red-ink);
+  font-weight: 800;
+  font-size: 1.0625rem;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.panicButton:disabled {
+  opacity: 0.6;
+}
+.panicFill {
+  position: absolute;
+  inset: 0;
+  background: var(--red);
+  transform-origin: left center;
+  transform: scaleX(var(--panic-progress, 0));
+  transition: transform 50ms linear;
+}
+.panicLabel {
+  position: relative;
+}
+.panicHint {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
