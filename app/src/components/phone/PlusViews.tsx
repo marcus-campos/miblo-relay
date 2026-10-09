@@ -262,6 +262,7 @@ export function SessionScreen({
   harness,
   block,
   repliesOn,
+  historyOn = true,
   online,
   ack,
   sentAt,
@@ -287,6 +288,11 @@ export function SessionScreen({
   block: ActBlock;
   /** Replies are on for this computer (off by default; turned on in a terminal there). */
   repliesOn: boolean;
+  /**
+   * The computer sends this conversation (its `history` setting, off too while it waits to be
+   * confirmed again): when off, no history ever comes and no reply can be answered.
+   */
+  historyOn?: boolean;
   online: boolean;
   ack: ReplyAck | null;
   /** When the last reply left the phone (null: none yet). */
@@ -370,6 +376,7 @@ export function SessionScreen({
         : block === "revoked"
           ? { reason: t.chat.revoked, commands: [tech.link] }
           : null;
+  const historyOff: ComposerOff = !historyOn ? { reason: t.plus.historyOff } : null;
   const repliesOff: ComposerOff = !repliesOn ? { reason: t.chat.replyOff, commands: [tech.replies] } : null;
   const planOff: ComposerOff =
     !plan || plan.k === "send"
@@ -382,8 +389,8 @@ export function SessionScreen({
     ? { reason: t.chat.replyTask, action: newTaskButton }
     : !isClaude
       ? { reason: t.chat.replyOther, action: newTaskButton }
-      : (blockOff ?? repliesOff ?? (history && !history.reply ? { reason: t.chat.replyChannel, commands: [tech.replies, tech.channel] } : null));
-  const off: ComposerOff = plan ? (blockOff ?? repliesOff ?? planOff) : v6Off;
+      : (blockOff ?? historyOff ?? repliesOff ?? (history && !history.reply ? { reason: t.chat.replyChannel, commands: [tech.replies, tech.channel] } : null));
+  const off: ComposerOff = plan ? (blockOff ?? historyOff ?? repliesOff ?? planOff) : v6Off;
   const taskRunning = task?.state === "running";
 
   return (
@@ -433,7 +440,9 @@ export function SessionScreen({
       <section className={styles.chatBody} aria-label={label}>
         <p className={styles.untrusted}>{t.plus.untrusted}</p>
         {!history ? (
-          <p className={styles.chatEmpty}>{block === "notEnrolled" || block === "revoked" ? t.plus.historyBlocked : t.plus.loading}</p>
+          <p className={styles.chatEmpty} data-testid={!historyOn && block !== "notEnrolled" && block !== "revoked" ? "history-off" : undefined}>
+            {block === "notEnrolled" || block === "revoked" ? t.plus.historyBlocked : !historyOn ? t.plus.historyOff : t.plus.loading}
+          </p>
         ) : history.msgs.length === 0 && history.state !== "working" ? (
           <p className={styles.chatEmpty}>{t.plus.noHistory}</p>
         ) : (

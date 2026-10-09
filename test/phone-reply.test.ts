@@ -3,7 +3,8 @@
 // The same file as miblo-platform web/tests/unit/phone-reply.test.ts without its rendering part
 // (the screen imports next/navigation, which only the app build maps here).
 import { describe, expect, it } from "vitest";
-import { parseHistory, parseReplyAck } from "@/components/phone/plus";
+import { parseHistory, parseReplyAck, plusCaps } from "@/components/phone/plus";
+import { phoneStrings } from "@/components/phone/strings";
 import { ackLine, offText, reasonText, replyPlan, sentHowOf, whenText } from "@/components/phone/reply-model";
 import { replyStrings } from "@/components/phone/reply-strings";
 
@@ -82,5 +83,18 @@ describe("1.24 replies on the phone", () => {
     expect(reasonText("passkey_bad_signature", "pt")).toBe("o computador não aceitou o Face ID, a digital ou o PIN deste celular.");
     // Something newer than this app: said with its code, never hidden.
     expect(reasonText("brand_new", "en")).toBe("the computer refused it (brand_new).");
+  });
+});
+
+describe("the computer's history off on the phone", () => {
+  it("reads history from the status frame: off (or waiting to be confirmed again) is false, unsaid is on", () => {
+    expect(plusCaps({ kind: "snapshot", plus: { on: true, history: false } })?.history).toBe(false);
+    expect(plusCaps({ kind: "snapshot", plus: { on: true, history: true } })?.history).toBe(true);
+    expect(plusCaps({ kind: "snapshot", plus: { on: true } })?.history).toBe(true);
+  });
+
+  it("says so in both languages, with how to turn it on", () => {
+    expect(phoneStrings("pt").plus.historyOff).toBe("O histórico está desligado no computador. Confirme as configurações no app Miblo (ou: miblo plus set history=on).");
+    expect(phoneStrings("en").plus.historyOff).toBe("The history is off on the computer. Confirm the settings in the Miblo app (or: miblo plus set history=on).");
   });
 });

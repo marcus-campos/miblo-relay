@@ -938,6 +938,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
           harness={h?.harness ?? "claude"}
           block={actBlock(current, caps, passkeys, currentLive?.link)}
           repliesOn={caps.replies}
+          historyOn={caps.history}
           online={phoneOnline && currentLive?.link === "open"}
           ack={last ? (room?.acks[last.nonce] ?? null) : null}
           sentAt={last?.at ?? null}

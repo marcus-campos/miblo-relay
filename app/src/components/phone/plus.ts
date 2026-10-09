@@ -83,7 +83,12 @@ export type ApprovalDone = { id: string; outcome: "allow" | "deny" | "timeout" |
 /** `queued` (1.24): waiting for the session to finish its turn (`how`: "turn_end"). */
 export type ReplyAck = { nonce: string; state: "queued" | "sent" | "delivered" | "refused"; reason: string; how: "now" | "turn_end" | null };
 /** The Miblo+ capabilities a status frame announces; `phones`: the ids of the enrolled phones. */
-export type PlusCaps = { on: boolean; approvals: boolean; replies: boolean; tasks: boolean; phones: string[] };
+/**
+ * `history`: the computer sends conversations to the phone. False when it is off there or waiting to
+ * be confirmed again (`rearm`: the computer reads it as off until then); a computer that does not
+ * say reads as on.
+ */
+export type PlusCaps = { on: boolean; approvals: boolean; replies: boolean; tasks: boolean; history: boolean; phones: string[] };
 export type EnrollResult = { phone: string; ok: boolean; fp: string | null; reason: string };
 
 export const HISTORY_MAX = 50;
@@ -298,7 +303,7 @@ export function plusCaps(payload: unknown): PlusCaps | null {
   const plus = obj(p?.plus);
   if (!plus || plus.on !== true) return null;
   const phones = Array.isArray(plus.phones) ? plus.phones.filter((x): x is string => typeof x === "string" && PHONE_RE.test(x)).slice(0, 16) : [];
-  return { on: true, approvals: plus.approvals === true, replies: plus.replies === true, tasks: plus.tasks === true, phones };
+  return { on: true, approvals: plus.approvals === true, replies: plus.replies === true, tasks: plus.tasks === true, history: plus.history !== false, phones };
 }
 
 export function parseHistory(payload: unknown): HistoryView | null {
