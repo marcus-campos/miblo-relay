@@ -897,6 +897,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     } finally {
       setPanicBusy(false);
     }
+  };
+
   // Push off in the settings: every room drops this phone's subscription, then the browser's goes.
   const disableAlerts = async () => {
     setNotify("busy");
