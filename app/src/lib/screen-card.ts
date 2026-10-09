@@ -21,12 +21,20 @@ const INK = { bg: '#0b0b0d', text: '#eeeeee', muted: '#aaaaaa', track: '#262629'
 /** The plugin's limits (lib/screen-card.js: title 24, caption 16, big value 10, text 40, tool 20). */
 export const LIMITS = { title: 24, text: 40, big: 10, label: 16, tool: 20, items: 4, sparkMin: 2, sparkMax: 24, json: 1024 } as const;
 
+/**
+ * 1.26: the built-in effects a card item may carry (`fx`), computed by the firmware in tiny dirty
+ * regions (docs/screen-sdk-architecture.md "Safest and smoothest first"). Any other name is ignored.
+ */
+export const CARD_FX = ['sweep', 'count', 'slide', 'pulse', 'blink', 'orbit', 'rain', 'ticker'] as const;
+export type CardFx = (typeof CARD_FX)[number];
+
+type Fx = { fx?: CardFx };
 export type CardLeaf =
-  | { t: 'big'; value: string; label: string }
-  | { t: 'ring'; value: number; label: string; color: CardColor }
-  | { t: 'bar'; value: number; label: string; color: CardColor }
-  | { t: 'text'; value: string }
-  | { t: 'spark'; values: number[]; label: string; color: CardColor };
+  | ({ t: 'big'; value: string; label: string } & Fx)
+  | ({ t: 'ring'; value: number; label: string; color: CardColor } & Fx)
+  | ({ t: 'bar'; value: number; label: string; color: CardColor } & Fx)
+  | ({ t: 'text'; value: string } & Fx)
+  | ({ t: 'spark'; values: number[]; label: string; color: CardColor } & Fx);
 export type CardItem = CardLeaf | { t: 'row'; items: CardLeaf[] };
 
 export interface Card {
@@ -37,6 +45,48 @@ export interface Card {
   icon: string | null;
   /** The layer: the frame slot (0..3) drawn under the card. */
   bg: number | null;
+  /** 1.26: the card's animation (flash slots played in order); absent when it has none. */
+  anim?: CardAnim;
+}
+
+/** 1.26: flash slots (8; frames, sprite sheets, tile data). */
+export const ANIM_SLOTS = 8;
+/** One step: a slot (a frame, or a sheet with its cell) shown for `ms` (50..2000). */
+export interface AnimStep {
+  slot: number;
+  cell: number | null;
+  ms: number;
+}
+/** The card's `anim: { steps: [[slot, ms] | [slot, cell, ms], ...], loop }` (at most 16 steps). */
+export interface CardAnim {
+  steps: AnimStep[];
+  loop: boolean;
+}
+export const ANIM_LIMITS = { steps: 16, cells: 16, minMs: 50, maxMs: 2000 } as const;
+
+const intIn = (v: unknown, lo: number, hi: number): v is number => Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi;
+
+/** A step list as the firmware validates it (slots that can exist, 50..2000 ms, at most 16), or null. */
+export function parseSteps(raw: unknown): AnimStep[] | null {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > ANIM_LIMITS.steps) return null;
+  const out: AnimStep[] = [];
+  for (const st of raw) {
+    if (!Array.isArray(st) || (st.length !== 2 && st.length !== 3)) return null;
+    const slot = st[0];
+    const ms = st[st.length - 1];
+    const cell = st.length === 3 ? st[1] : null;
+    if (!intIn(slot, 0, ANIM_SLOTS - 1) || !intIn(ms, ANIM_LIMITS.minMs, ANIM_LIMITS.maxMs)) return null;
+    if (cell !== null && !intIn(cell, 0, ANIM_LIMITS.cells - 1)) return null;
+    out.push({ slot, cell, ms });
+  }
+  return out;
+}
+
+/** The card's `anim`, or undefined when absent or invalid (the firmware plays nothing then). */
+export function parseCardAnim(raw: unknown): CardAnim | undefined {
+  if (!isObj(raw)) return undefined;
+  const steps = parseSteps(raw.steps);
+  return steps ? { steps, loop: raw.loop !== false } : undefined;
 }
 
 // Controls, bidi marks and overrides, and every other format character (the plugin's cleanText).
@@ -61,6 +111,13 @@ export function frameSlot(v: unknown): number | null {
 }
 
 function leaf(v: unknown): CardLeaf | null {
+  const l = leafOnly(v);
+  if (!l || !isObj(v)) return l;
+  const fx = typeof v.fx === 'string' ? v.fx : isObj(v.fx) && typeof v.fx.t === 'string' ? v.fx.t : null;
+  return fx && (CARD_FX as readonly string[]).includes(fx) ? { ...l, fx: fx as CardFx } : l;
+}
+
+function leafOnly(v: unknown): CardLeaf | null {
   if (!isObj(v)) return null;
   const label = cleanLine(v.label, LIMITS.label);
   switch (v.t) {
@@ -111,7 +168,10 @@ export function parseCard(raw: unknown): Card | null {
     }
   }
   const icon = typeof raw.icon === 'string' && /^[a-z0-9-]{1,16}$/.test(raw.icon) ? raw.icon : null;
-  return { v: 1, title: cleanLine(raw.title, LIMITS.title), items, icon, bg: frameSlot(raw.bg) };
+  const card: Card = { v: 1, title: cleanLine(raw.title, LIMITS.title), items, icon, bg: frameSlot(raw.bg) };
+  const anim = parseCardAnim(raw.anim);
+  if (anim) card.anim = anim;
+  return card;
 }
 
 // ---- the layout (fixed per item count) ----
@@ -210,7 +270,21 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
  * in two). `layer`: a frame is under it (no background of its own, the header on a dark band).
  */
 export function layoutCard(card: Card, tool: string, layer: boolean): Prim[] {
+  const { head, cells } = layoutParts(card, tool, layer);
+  return [...head, ...cells.flatMap((c) => c.prims)];
+}
+
+/** One drawn cell of a card (a row is two): the leaf, its box and its drawing. */
+export interface CellLayout {
+  leaf: CardLeaf;
+  box: { x: number; y: number; w: number; h: number };
+  prims: Prim[];
+}
+
+/** The card's drawing in parts: the background and header, then each cell (what the 1.26 effects move). */
+export function layoutParts(card: Card, tool: string, layer: boolean): { head: Prim[]; cells: CellLayout[] } {
   const out: Prim[] = [];
+  const cells: CellLayout[] = [];
   if (!layer) out.push({ k: 'rect', x: 0, y: 0, w: SIZE, h: SIZE, color: INK.bg });
   else out.push({ k: 'rect', x: 0, y: 0, w: SIZE, h: HEADER, color: INK.bg, alpha: 0.78 });
   const name = cleanLine(tool, LIMITS.tool);
@@ -225,10 +299,13 @@ export function layoutCard(card: Card, tool: string, layer: boolean): Prim[] {
     if (it.t === 'row') {
       const gap = 12;
       const cw = it.items.length === 2 ? (w - gap) / 2 : w;
-      it.items.forEach((k, j) => out.push(...leafPrims(k, Math.round(PAD + j * (cw + gap)), y, Math.round(cw), h, false)));
-    } else out.push(...leafPrims(it, PAD, y, w, h, n === 1));
+      it.items.forEach((k, j) => {
+        const box = { x: Math.round(PAD + j * (cw + gap)), y, w: Math.round(cw), h };
+        cells.push({ leaf: k, box, prims: leafPrims(k, box.x, y, box.w, h, false) });
+      });
+    } else cells.push({ leaf: it, box: { x: PAD, y, w, h }, prims: leafPrims(it, PAD, y, w, h, n === 1) });
   });
-  return out;
+  return { head: out, cells };
 }
 
 /** Draws a layout on a 240 x 240 canvas (the fallback: a screen module without `miblo_screen_card`). */
@@ -420,4 +497,86 @@ export function screenAppOf(snapshot: unknown): ScreenApp | null {
   const at = isObj(fr) && typeof fr.at === 'number' && Number.isFinite(fr.at) ? fr.at : null;
   const json = JSON.stringify({ ...(s.card as Record<string, unknown>), bg: bg === null ? undefined : `frame:${bg}`, tool });
   return { card: { ...card, bg }, json, tool, bg, frameAt: at };
+}
+
+// ---- 1.26: rectangle frames ----
+
+/** A rectangle frame (1.26): a region of the screen, drawn over what is there (a delta). */
+export interface RectFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** w x h RGB565. */
+  rgb565: Uint16Array;
+}
+
+/** The marker in place of the palette size that says the frame is a rectangle (a palette size is 2..64). */
+export const RECT_MARK = 0xff;
+
+/**
+ * A frame as 1.26 plays it: a whole MFRM1 frame (x 0, y 0, 240 x 240), or a rectangle frame:
+ * "MFRM1", 0xFF, x, y, w - 1, h - 1 (one byte each, the rectangle on screen), then the palette size,
+ * the palette, the RLE length, the RLE (rows of w pixels, no run across a row, exactly w x h pixels)
+ * and the CRC of everything before it, as a whole frame. null: not a valid one.
+ *
+ * The rectangle header is the app's proposed layout for "MFRM1 gains x, y, w, h" (the firmware
+ * stream anim-fw-tiles owns the final one); a whole frame is decoded exactly as before.
+ */
+export function decodeAnyFrame(b: Uint8Array): RectFrame | null {
+  if (b.length < 16 || String.fromCharCode(...b.subarray(0, 5)) !== 'MFRM1') return null;
+  if (b[5] !== RECT_MARK) {
+    const f = decodeFrame(b);
+    return f ? { x: 0, y: 0, w: SIZE, h: SIZE, rgb565: f.rgb565 } : null;
+  }
+  const [x, y] = [b[6], b[7]];
+  const [w, h] = [b[8] + 1, b[9] + 1];
+  if (x + w > SIZE || y + h > SIZE) return null;
+  const n = b[10];
+  if (n < 2 || n > 64 || b.length < 13 + 2 * n) return null;
+  const l = b[11 + 2 * n] | (b[12 + 2 * n] << 8);
+  if (l > MAX_RLE || l % 2 !== 0 || b.length !== 13 + 2 * n + l + 4) return null;
+  const crc = (b[b.length - 4] | (b[b.length - 3] << 8) | (b[b.length - 2] << 16) | (b[b.length - 1] << 24)) >>> 0;
+  if (crc32(b.subarray(0, b.length - 4)) !== crc) return null;
+  const palette = new Uint16Array(n);
+  for (let i = 0; i < n; i++) palette[i] = b[11 + 2 * i] | (b[12 + 2 * i] << 8);
+  const rgb565 = new Uint16Array(w * h);
+  let px = 0;
+  for (let i = 13 + 2 * n, end = i + l; i < end; i += 2) {
+    const count = b[i];
+    const idx = b[i + 1];
+    // A run never crosses the end of a row.
+    if (count === 0 || idx >= n || px + count > w * h || (px % w) + count > w) return null;
+    rgb565.fill(palette[idx], px, px + count);
+    px += count;
+  }
+  return px === w * h ? { x, y, w, h, rgb565 } : null;
+}
+
+/** A rectangle frame's file (the tests and the app's mock; the SDK has the real converter). */
+export function encodeRectFrame(r: RectFrame): Uint8Array {
+  const colours = [...new Set(r.rgb565)];
+  if (colours.length > 64) throw new Error('too many colours');
+  while (colours.length < 2) colours.push(0);
+  const index = new Map(colours.map((c, i) => [c, i]));
+  const rle: number[] = [];
+  for (let y = 0; y < r.h; y++) {
+    let x = 0;
+    while (x < r.w) {
+      const c = r.rgb565[y * r.w + x];
+      let run = 1;
+      while (x + run < r.w && run < 255 && r.rgb565[y * r.w + x + run] === c) run++;
+      rle.push(run, index.get(c)!);
+      x += run;
+    }
+  }
+  const n = colours.length;
+  const out = new Uint8Array(13 + 2 * n + rle.length + 4);
+  out.set([0x4d, 0x46, 0x52, 0x4d, 0x31, RECT_MARK, r.x, r.y, r.w - 1, r.h - 1, n]);
+  colours.forEach((c, i) => out.set([c & 0xff, c >> 8], 11 + 2 * i));
+  out.set([rle.length & 0xff, rle.length >> 8], 11 + 2 * n);
+  out.set(rle, 13 + 2 * n);
+  const crc = crc32(out.subarray(0, out.length - 4));
+  out.set([crc & 0xff, (crc >>> 8) & 0xff, (crc >>> 16) & 0xff, crc >>> 24], out.length - 4);
+  return out;
 }

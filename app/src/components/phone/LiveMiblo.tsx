@@ -6,10 +6,14 @@
 // back in the gadget's shape), wearing the first Miblo's look. 1.25: a program's App screen
 // (lib/screen-card.ts) over the ordinary screens, drawn over a neutral background: its frame stays
 // on the Miblo ("fundo no Miblo"). 10 frames a second while the tab and the page are visible.
+// 1.26: an animation plays at its own fps, never above, in step with the display
+// (requestAnimationFrame, which also stops in a hidden tab), and nothing while the page is hidden;
+// the card's effects play here, the animation's pictures stay on the Miblo ("animação no Miblo").
 import { useEffect, useRef } from "react";
 import { loadMibloScreen } from "@/lib/generated/miblo-screen.js";
 import { SCREEN_WASM } from "@/lib/screen-module";
 import { LiveScreen, SIZE, type ScreenMiblo } from "@/lib/screen-live";
+import { parseAnim } from "@/lib/screen-anim";
 import { b64url } from "@/lib/relay-crypto";
 import { usePetFile } from "./pet-cache";
 import type { MibloView, SnapshotView } from "./snapshot";
@@ -46,6 +50,8 @@ export function LiveMiblo({ t, snap, lang }: { t: PhoneStrings; snap: SnapshotVi
       hidden: () => document.hidden,
       every: (fn, ms) => window.setInterval(fn, ms),
       stop: (h) => window.clearInterval(h as number),
+      raf: (fn) => window.requestAnimationFrame(fn),
+      cancelRaf: (h) => window.cancelAnimationFrame(h as number),
       font: getComputedStyle(document.body).fontFamily || "system-ui, sans-serif",
     });
     live.current = l;
@@ -67,6 +73,8 @@ export function LiveMiblo({ t, snap, lang }: { t: PhoneStrings; snap: SnapshotVi
 
   const app = snap.app;
   const layer = app?.bg !== null && app?.bg !== undefined;
+  // The phone has no bridge to fetch an animation's frames or tiles from: they stay on the Miblo.
+  const anim = app ? parseAnim(snap.gadget.screen, app.card) : null;
   return (
     <figure className={styles.live} data-app={app ? "true" : undefined}>
       <div className={styles.liveBezel}>
@@ -82,6 +90,11 @@ export function LiveMiblo({ t, snap, lang }: { t: PhoneStrings; snap: SnapshotVi
         {app && layer && (
           <span className={styles.liveBg} title={t.miblo.appBgHelp}>
             {t.miblo.appBg}
+          </span>
+        )}
+        {anim && (
+          <span className={styles.liveBg} title={t.miblo.animHelp}>
+            {t.miblo.anim}
           </span>
         )}
       </figcaption>
