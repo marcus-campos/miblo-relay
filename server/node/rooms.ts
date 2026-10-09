@@ -11,7 +11,7 @@
 //   room sent before that is queued and delivered first.
 import crypto from "node:crypto";
 import type { WebSocket } from "ws";
-import { PUSH_BUDGET_OBJECT, RelayRoom, type RelayEnv, type RoomRuntime, type RoomSocket, type RoomState, type RoomStorage } from "../core/relay/room";
+import { HOOK_ASK_PATH, PUSH_BUDGET_OBJECT, RelayRoom, type RelayEnv, type RoomRuntime, type RoomSocket, type RoomState, type RoomStorage } from "../core/relay/room";
 import type { RoomNamespace, RoomStub } from "../core/env";
 import type { SqliteDb } from "./sqlite-db";
 
@@ -309,7 +309,13 @@ export class NodeRooms implements RoomNamespace {
     return {
       fetch: (input: string | Request, init?: RequestInit) => {
         const req = typeof input === "string" ? new Request(input, init) : input;
-        return this.host(name).event((room) => room.fetch(req));
+        const host = this.host(name);
+        if (new URL(req.url).pathname === HOOK_ASK_PATH) {
+          // An inspector question waits for the writer's answer, which arrives as another event of
+          // this room: it waits its turn at the gate, then runs beside it (it reads no storage).
+          return host.event(async (room) => room).then((room) => room.fetch(req));
+        }
+        return host.event((room) => room.fetch(req));
       },
     };
   }

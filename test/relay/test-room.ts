@@ -27,6 +27,11 @@ export class TestRelayRoom extends RelayRoom {
       // v6 push: the account side's "phones changed" call.
       return super.fetch(new Request("https://relay.internal/__phones", { method: request.method }));
     }
+    if (url.pathname === "/__test/hook" || url.pathname === "/__test/hookask" || url.pathname === "/__test/hooks") {
+      // Webhooks: the account side's internal calls (a sealed delivery, an inspector question, "hooks changed").
+      const path = url.pathname === "/__test/hook" ? "/__hook" : url.pathname === "/__test/hookask" ? "/__hook_ask" : "/__hooks";
+      return super.fetch(new Request(`https://relay.internal${path}`, { method: "POST", body: await request.text() }));
+    }
     if (url.pathname === "/__test/alarm") {
       await this.alarm();
       return new Response("ok");
@@ -59,4 +64,4 @@ export class TestRelayRoom extends RelayRoom {
 }
 
 /** The test routes: /__test/<room>/<what> reaches that room's TestRelayRoom. */
-export const TEST_ROUTE = /^\/__test\/([A-Za-z0-9_-]{22}|push-budget)\/(clock|alarm|storage|plan|budget|plus|endpoint|payer|roomcap|phones)$/;
+export const TEST_ROUTE = /^\/__test\/([A-Za-z0-9_-]{22}|push-budget)\/(clock|alarm|storage|plan|budget|plus|endpoint|payer|roomcap|phones|hook|hookask|hooks)$/;

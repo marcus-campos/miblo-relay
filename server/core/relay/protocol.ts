@@ -384,3 +384,54 @@ export function pushNotification(kind: PushKind, lang: PushLang) {
 export function needsYouNotification(lang: PushLang) {
   return pushNotification("needs_you", lang);
 }
+
+/**
+ * Webhooks (Miblo+; docs/phone-relay-protocol.md "Webhooks"): deliveries sealed by the worker to
+ * the computer's own key wait in the room for its writer; the account page's questions to the
+ * computer (the inspector) pass through and are never stored.
+ */
+export const HOOKS = {
+  /** Deliveries a room keeps for its computer (the oldest goes past it)... */
+  queueMax: 50,
+  /** ...and for how long. */
+  ttlMs: 24 * 60 * 60 * 1000,
+  /**
+   * A sealed delivery's ct (base64url characters): a 64 KB body (as text, or base64url when it is
+   * not UTF-8) and 2 KB of headers, base64url once more. Under the Node relay's 128 KiB per stored item.
+   */
+  deliveryCtMax: 120 * 1024,
+  /** A sealed answer to the inspector (it travels in one writer frame). */
+  answerCtMax: 60 * 1024,
+  /** Inspector questions waiting for the computer at once, and how long each waits. */
+  asksInFlight: 4,
+  askWaitMs: 8_000,
+  /** Ids in one {"t":"hook_ack"}. */
+  ackMax: 50,
+  /** hook_ack / hook_answer frames per second from the writer (on top of its 2 other frames). */
+  writerHookPerSecond: 10,
+} as const;
+export const HOOK_OPS = ["list", "get", "test", "replay"] as const;
+/** A delivery id (worker-made) or a question id: 16 random bytes, base64url. */
+export const HOOK_ID22_RE = /^[A-Za-z0-9_-]{22}$/;
+/** A hook's public id ("h" + 9 of [a-z0-9]). */
+export const HID_RE = /^h[a-z0-9]{9}$/;
+/** What the account side tells the writer when the account's hooks changed (fixed, nothing in it). */
+export const HOOKS_CHANGED = '{"t":"hooks_changed"}';
+
+export type HookEnvelope = { epk: string; iv: string; ct: string };
+
+/** {epk, iv, ct}: an ephemeral P-256 point (65 bytes raw), a 12-byte iv, ct within `maxCt`. */
+export function isHookEnvelope(v: unknown, maxCt: number): v is HookEnvelope {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const e = v as Record<string, unknown>;
+  return (
+    typeof e.epk === "string" &&
+    /^[A-Za-z0-9_-]{87}$/.test(e.epk) &&
+    typeof e.iv === "string" &&
+    IV_RE.test(e.iv) &&
+    typeof e.ct === "string" &&
+    e.ct.length >= 22 &&
+    e.ct.length <= maxCt &&
+    B64URL_RE.test(e.ct)
+  );
+}

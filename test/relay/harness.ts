@@ -108,7 +108,10 @@ export async function nodeHarness(): Promise<Harness> {
     if (test) {
       const name = test[1] === "push-budget" ? PUSH_BUDGET_OBJECT : test[1];
       const body = request.method === "POST" ? await request.text() : undefined;
-      return rooms.get(rooms.idFromName(name)).fetch(`https://relay.internal/__test/${test[2]}${url.search}`, { method: request.method, body });
+      // An inspector question goes to the room's own path, as the account side calls it (it must not
+      // hold the room's gate while it waits for the writer).
+      const path = test[2] === "hookask" ? "/__hook_ask" : `/__test/${test[2]}${url.search}`;
+      return rooms.get(rooms.idFromName(name)).fetch(`https://relay.internal${path}`, { method: request.method, body });
     }
     return (await handleRelay(request, env)) ?? new Response("not found", { status: 404 });
   };

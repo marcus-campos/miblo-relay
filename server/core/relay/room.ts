@@ -45,6 +45,13 @@ import {
   pushLang,
   sameString,
   sha256B64url,
+  HOOKS,
+  HOOK_OPS,
+  HOOK_ID22_RE,
+  HID_RE,
+  HOOKS_CHANGED,
+  isHookEnvelope,
+  type HookEnvelope,
   type Plan,
   type PushKind,
   type PushLang,
@@ -167,6 +174,13 @@ export const PLUS_PATH = "/__plus";
 export const PHONES_PATH = "/__phones";
 /** What the writer gets for it: fixed, with nothing in it (the computer then asks the account). */
 export const PHONES_CHANGED = '{"t":"phones_changed"}';
+/** Webhooks (internal, binding only): a sealed delivery for the computer, an inspector question, "the hooks changed". */
+export const HOOK_PATH = "/__hook";
+export const HOOK_ASK_PATH = "/__hook_ask";
+export const HOOKS_PATH = "/__hooks";
+/** A delivery waiting for the writer: `at` is when the room got it (its 24 h start then). */
+type StoredHook = { d: string; at: number; e: HookEnvelope };
+const hookKey = (at: number, d: string) => `hk:${String(at).padStart(15, "0")}:${d}`;
 const enc = new TextEncoder();
 /** The router's network keys: "4:<key>" (IPv4) or "64:<key>,56:<key>,48:<key>" (IPv6). */
 const NET_KEYS_RE = /^(4|64|56|48):[A-Za-z0-9_-]{22}(,(64|56|48):[A-Za-z0-9_-]{22}){0,2}$/;
@@ -212,6 +226,12 @@ export class RelayRoom {
   private upRate = new WeakMap<RoomSocket, { second: number; n: number }>();
   /** v3: per reader and channel, "up" frames in the current minute. */
   private upMinute = new WeakMap<RoomSocket, Map<string, { minute: number; n: number }>>();
+  /** Webhooks: the writer's hook_ack / hook_answer frames this second. */
+  private hookRate = new WeakMap<RoomSocket, { second: number; n: number }>();
+  /** Webhooks: inspector questions waiting for the writer's answer (memory only). */
+  private asks = new Map<string, (e: HookEnvelope) => void>();
+  /** When the oldest queued delivery arrived (null: none), for the alarm. */
+  private hookOldest: number | null = null;
 
   constructor(
     protected readonly ctx: RoomState,
@@ -225,6 +245,7 @@ export class RelayRoom {
       this.persistedAt = this.frame?.at ?? 0;
       this.lastSeenWritten = this.meta.lastSeen ?? 0;
       this.alarmAt = await ctx.storage.getAlarm();
+      this.hookOldest = await this.oldestHook();
       this.allowed = (await ctx.storage.get<boolean>("allowed")) === true;
     });
     // Keep-alive pings answered without waking the object.
@@ -241,6 +262,9 @@ export class RelayRoom {
     if (url.pathname === BUDGET_PATH) return this.budgetRequest(url, request);
     if (url.pathname === PLUS_PATH) return this.plusRequest(request);
     if (url.pathname === PHONES_PATH) return this.phonesChanged(request);
+    if (url.pathname === HOOK_PATH) return this.hookRequest(request);
+    if (url.pathname === HOOK_ASK_PATH) return this.hookAskRequest(request);
+    if (url.pathname === HOOKS_PATH) return this.hooksChanged(request);
     const room = url.pathname.slice(1);
     if (!isRoom(room)) return new Response("bad room", { status: 404 });
     if (request.method === "DELETE") return this.wipeRequest(request, room);
@@ -312,6 +336,11 @@ export class RelayRoom {
       return this.authed(ws, att.role, att.room, phone, phone ? this.meta.phones?.[phone] : undefined);
     }
     if (data.t === "auth") return; // already authenticated
+    // Webhooks: the writer's acks and answers have their own budget (a flush acks in a burst).
+    if (att.role === "writer" && (data.t === "hook_ack" || data.t === "hook_answer")) {
+      if (!this.allow(ws, HOOKS.writerHookPerSecond, this.hookRate)) return;
+      return data.t === "hook_ack" ? this.hookAck(data.d) : this.hookAnswer(data.q, data.e);
+    }
     if (!this.allow(ws, att.role === "writer" ? LIMITS.writerPerSecond : LIMITS.readerPerSecond)) return;
 
     // v1.1 (Miblo+): channels other than "status" and reader "up" frames need the plus plan.
@@ -378,6 +407,7 @@ export class RelayRoom {
     }
     // Miblo+ lapsed on its own: the free plan's one phone applies at once.
     if (this.meta.plan === "plus" && this.plan() === "free") this.enforceFreeCap();
+    await this.dropExpiredHooks(now);
     const expiry = this.expiry();
     const anyoneHere = this.sockets().some((ws) => this.attachment(ws)?.authed);
     if (expiry !== null && expiry <= now && !anyoneHere) {
@@ -504,6 +534,7 @@ export class RelayRoom {
       for (const old of peers) old.close(CLOSE.replaced, "replaced by a newer writer");
       await this.touch(now);
       this.presence();
+      await this.flushHooks(ws);
       return;
     }
     const oldestFirst = (list: RoomSocket[]) => list.sort((a, b) => (this.attachment(a)?.openedAt ?? 0) - (this.attachment(b)?.openedAt ?? 0));
@@ -662,6 +693,162 @@ export class RelayRoom {
   }
 
   /**
+   * Webhooks: a delivery the worker sealed to the computer's key ({d, e}; the room cannot open it).
+   * Kept (at most HOOKS.queueMax, the oldest dropped; HOOKS.ttlMs) until the writer acks it, and
+   * sent to the writer now when it is connected. Only a Miblo+ room takes them (402). -> 202
+   * {"queued": n, "sent": bool}.
+   */
+  private async hookRequest(request: Request): Promise<Response> {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let body: { d?: unknown; e?: unknown };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return new Response("bad request", { status: 400 });
+    }
+    if (typeof body.d !== "string" || !HOOK_ID22_RE.test(body.d) || !isHookEnvelope(body.e, HOOKS.deliveryCtMax)) return new Response("bad request", { status: 400 });
+    if (this.plan() !== "plus") return new Response("plan", { status: 402 });
+    const now = this.now();
+    const item: StoredHook = { d: body.d, at: now, e: { epk: body.e.epk, iv: body.e.iv, ct: body.e.ct } };
+    await this.ctx.storage.put(hookKey(now, body.d), item);
+    const all = [...(await this.ctx.storage.list<StoredHook>({ prefix: "hk:" })).keys()];
+    const extra = all.length - HOOKS.queueMax;
+    if (extra > 0) await this.ctx.storage.delete(all.slice(0, extra));
+    const left = Math.min(all.length, HOOKS.queueMax);
+    this.hookOldest = this.hookOldest === null ? now : this.hookOldest;
+    if (extra > 0) this.hookOldest = await this.oldestHook();
+    await this.scheduleAlarm((this.hookOldest ?? now) + HOOKS.ttlMs);
+    const out = JSON.stringify({ t: "hook", d: item.d, at: item.at, e: item.e });
+    let sent = false;
+    for (const writer of this.sockets("writer")) {
+      if (!this.attachment(writer)?.authed) continue;
+      try {
+        writer.send(out);
+        sent = true;
+      } catch {
+        // Closing: it gets it again when it is back.
+      }
+    }
+    return Response.json({ queued: left, sent }, { status: 202 });
+  }
+
+  private async oldestHook(): Promise<number | null> {
+    const first = [...(await this.ctx.storage.list<StoredHook>({ prefix: "hk:" })).values()][0];
+    return first ? first.at : null;
+  }
+
+  /** Every delivery still waiting, oldest first, to a writer that just authenticated. */
+  private async flushHooks(ws: RoomSocket): Promise<void> {
+    const now = this.now();
+    await this.dropExpiredHooks(now);
+    for (const item of (await this.ctx.storage.list<StoredHook>({ prefix: "hk:" })).values()) {
+      try {
+        ws.send(JSON.stringify({ t: "hook", d: item.d, at: item.at, e: item.e }));
+      } catch {
+        return;
+      }
+    }
+  }
+
+  private async dropExpiredHooks(now: number): Promise<void> {
+    const all = await this.ctx.storage.list<StoredHook>({ prefix: "hk:" });
+    const old = [...all].filter(([, v]) => v.at + HOOKS.ttlMs <= now).map(([k]) => k);
+    if (old.length) await this.ctx.storage.delete(old);
+    const left = [...all.values()].filter((v) => v.at + HOOKS.ttlMs > now);
+    this.hookOldest = left.length ? left[0].at : null;
+  }
+
+  /** {"t":"hook_ack","d":[ids]}: the computer has these deliveries; they go. */
+  private async hookAck(ids: unknown): Promise<void> {
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > HOOKS.ackMax) return;
+    const want = new Set(ids.filter((d): d is string => typeof d === "string" && HOOK_ID22_RE.test(d)));
+    if (!want.size) return;
+    const all = await this.ctx.storage.list<StoredHook>({ prefix: "hk:" });
+    const gone = [...all].filter(([, v]) => want.has(v.d)).map(([k]) => k);
+    if (!gone.length) return;
+    await this.ctx.storage.delete(gone);
+    this.hookOldest = await this.oldestHook();
+  }
+
+  /**
+   * Webhooks: the account page's question to the computer ({q, hook, op, d?, epk}), sent to the
+   * writer as {"t":"hook_ask",...}; the answer ({"t":"hook_answer","q","e"}, sealed by the computer
+   * to the page's key `epk`) comes back as {e}. Never stored. 503 no writer, 429 too many waiting,
+   * 504 no answer in time.
+   */
+  private async hookAskRequest(request: Request): Promise<Response> {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let body: { q?: unknown; hook?: unknown; op?: unknown; d?: unknown; epk?: unknown };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return new Response("bad request", { status: 400 });
+    }
+    const { q, hook, op, d, epk } = body;
+    if (
+      typeof q !== "string" ||
+      !HOOK_ID22_RE.test(q) ||
+      typeof hook !== "string" ||
+      !HID_RE.test(hook) ||
+      typeof op !== "string" ||
+      !(HOOK_OPS as readonly string[]).includes(op) ||
+      (d !== undefined && (typeof d !== "string" || !HOOK_ID22_RE.test(d))) ||
+      typeof epk !== "string" ||
+      !/^[A-Za-z0-9_-]{87}$/.test(epk)
+    ) {
+      return new Response("bad request", { status: 400 });
+    }
+    if (this.plan() !== "plus") return new Response("plan", { status: 402 });
+    const writers = this.sockets("writer").filter((w) => this.attachment(w)?.authed);
+    if (!writers.length) return Response.json({ error: "bridge_offline" }, { status: 503 });
+    if (this.asks.size >= HOOKS.asksInFlight || this.asks.has(q)) return Response.json({ error: "busy" }, { status: 429 });
+    const answer = new Promise<HookEnvelope | null>((resolve) => {
+      const timer = setTimeout(() => {
+        this.asks.delete(q);
+        resolve(null);
+      }, HOOKS.askWaitMs);
+      this.asks.set(q, (e) => {
+        clearTimeout(timer);
+        this.asks.delete(q);
+        resolve(e);
+      });
+    });
+    const out = JSON.stringify({ t: "hook_ask", q, hook, op, ...(d ? { d } : {}), epk });
+    for (const w of writers) {
+      try {
+        w.send(out);
+      } catch {
+        // Closing.
+      }
+    }
+    const e = await answer;
+    if (!e) return Response.json({ error: "no_answer" }, { status: 504 });
+    return Response.json({ e });
+  }
+
+  /** {"t":"hook_answer","q","e"}: hands the sealed answer to the question waiting for it. */
+  private hookAnswer(q: unknown, e: unknown): void {
+    if (typeof q !== "string" || !HOOK_ID22_RE.test(q) || !isHookEnvelope(e, HOOKS.answerCtMax)) return;
+    this.asks.get(q)?.({ epk: e.epk, iv: e.iv, ct: e.ct });
+  }
+
+  /** Webhooks: the account's hooks changed; the writer reads them itself (fixed frame, nothing kept). */
+  private hooksChanged(request: Request): Response {
+    if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+    let n = 0;
+    for (const writer of this.sockets("writer")) {
+      if (!this.attachment(writer)?.authed) continue;
+      try {
+        writer.send(HOOKS_CHANGED);
+        n += 1;
+      } catch {
+        // Closing.
+      }
+    }
+    return Response.json({ writers: n });
+  }
+
+  /**
    * v3: tells the writer how many phones are connected ({"t":"presence","readers":n}, metadata the
    * relay has anyway). The computer only waits for a phone's approval while one is connected.
    * `leaving`: a reader socket that is closing and must not be counted.
@@ -784,7 +971,9 @@ export class RelayRoom {
   /** When the room is deleted: 24 h after creation if no reader ever joined, else 30 days idle. */
   private expiry(): number | null {
     if (this.meta.createdAt === undefined) return null;
-    if (!this.meta.readerEver) return this.meta.createdAt + LIMITS.noReaderTtlMs;
+    // A Miblo+ room (claimed by a linked computer with its proof) may serve only webhooks, with no
+    // phone ever: it lives like a room a phone joined.
+    if (!this.meta.readerEver && this.meta.plan !== "plus") return this.meta.createdAt + LIMITS.noReaderTtlMs;
     return (this.meta.lastSeen ?? this.meta.createdAt) + LIMITS.idleMs;
   }
 
@@ -1151,6 +1340,7 @@ export class RelayRoom {
     this.persistedAt = 0;
     this.alarmAt = null;
     this.lastSeenWritten = 0;
+    this.hookOldest = null;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     // A registered room stays registered (its owner may come back after an idle cleanup).
@@ -1166,6 +1356,7 @@ export class RelayRoom {
     if (this.frameDirty && this.meta.readerEver) deadlines.push(this.persistedAt + LIMITS.persistIntervalMs);
     if (this.frame && this.persistedAt) deadlines.push(this.frame.at + LIMITS.frameTtlMs);
     if (this.meta.plan === "plus" && this.meta.planUntil !== undefined && this.meta.planUntil > now) deadlines.push(this.meta.planUntil);
+    if (this.hookOldest !== null) deadlines.push(this.hookOldest + HOOKS.ttlMs);
     const expiry = this.expiry();
     // Someone is still connected past the expiry: look again in a day.
     if (expiry !== null) deadlines.push(expiry <= now ? now + DAY : expiry);
