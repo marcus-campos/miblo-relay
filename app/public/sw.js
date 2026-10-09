@@ -1,8 +1,8 @@
 // Service worker of the Miblo phone app, registered with scope /app/ (and /en/app/). The same as
 // miblo.ai's, with this build's asset paths (/assets/, /theme.js).
-// Offline shell (the app page and its static files), generic push alerts, and opening the app
-// from an alert. Never touches pages outside its scope.
-const VERSION = "miblo-phone-v2";
+// Offline shell (the app page and its static files), push notifications with fixed words only,
+// and opening the app from one. Never touches pages outside its scope.
+const VERSION = "miblo-phone-v3";
 // "/app/" or "/en/app/": the app page itself, with the slash.
 const scopePath = new URL(self.registration.scope).pathname;
 
@@ -73,8 +73,18 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+// What a notification may be about (the relay's fixed kinds) and the fixed words for each: the
+// payload carries nothing from the computer, and anything else in it is ignored. Same list as
+// push.ts (PUSH_OPEN, pushTarget).
+const WORDS = {
+  needs_you: ["A sessão precisa de você", "A session needs you"],
+  approval: ["Pedido de permissão", "Permission request"],
+  task_done: ["Tarefa concluída", "Task finished"],
+  task_failed: ["A tarefa falhou", "Task failed"],
+};
+const KINDS = Object.keys(WORDS);
+
 self.addEventListener("push", (event) => {
-  // The payload is generic ("a session needs you"); nothing from the computer is in it.
   let data = {};
   try {
     data = event.data ? event.data.json() : {};
@@ -82,28 +92,42 @@ self.addEventListener("push", (event) => {
     data = {};
   }
   const en = scopePath.startsWith("/en");
-  const title = typeof data.title === "string" ? data.title : "Miblo";
-  const body = typeof data.body === "string" ? data.body : en ? "A session needs you" : "Uma sessão precisa de você";
+  const kind = KINDS.includes(data && data.t) ? data.t : "needs_you";
+  // The words come from this file, in the app's language (the relay's are the same).
+  const body = WORDS[kind][en ? 1 : 0];
+  // A permission request and "needs you" are the same moment of a session: one notification,
+  // replaced; a task's end is its own. It buzzes again only when none of its kind is showing.
+  const tag = kind === "task_done" || kind === "task_failed" ? "miblo-task" : "miblo-needs-you";
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      tag: "miblo-needs-you",
-      renotify: true,
-      icon: "/app/icon-192.png",
-      badge: "/app/badge-96.png",
-      data: { url: scopePath },
-    }),
+    (async () => {
+      const showing = await self.registration.getNotifications({ tag }).catch(() => []);
+      await self.registration.showNotification("Miblo", {
+        body,
+        tag,
+        renotify: showing.length === 0,
+        icon: "/app/icon-192.png",
+        badge: "/app/badge-96.png",
+        data: { url: `${scopePath}?open=${kind}`, kind },
+      });
+    })(),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = new URL((event.notification.data && event.notification.data.url) || scopePath, location.origin).href;
+  const data = event.notification.data || {};
+  const kind = KINDS.includes(data.kind) ? data.kind : null;
+  // Only the app's own page, whatever the notification says.
+  const target = new URL(kind ? `${scopePath}?open=${kind}` : scopePath, location.origin).href;
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of all) {
-        if (new URL(client.url).pathname.startsWith(scopePath) && "focus" in client) return client.focus();
+        if (new URL(client.url).pathname.startsWith(scopePath) && "focus" in client) {
+          // Open already: shown, and told to show the "Agora" tab.
+          client.postMessage({ t: "miblo-open", kind });
+          return client.focus();
+        }
       }
       return self.clients.openWindow(target);
     })(),

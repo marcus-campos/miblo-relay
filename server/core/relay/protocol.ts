@@ -74,6 +74,11 @@ export const LIMITS = {
   /** Otherwise it is deleted after this long without writer activity (readers do not count). */
   idleMs: 30 * 24 * 60 * 60 * 1000,
   pushIntervalMs: 60 * 1000,
+  /**
+   * A phone that said the app is on its screen ({"t":"fg","on":true}, re-sent every minute while it
+   * stays there) gets no push for this long after it last said so: it sees the card already.
+   */
+  foregroundFreshMs: 150 * 1000,
   /** Push events per room per UTC day. */
   pushesPerRoomPerDay: 30,
   /**
@@ -347,9 +352,35 @@ export function pushLang(value: unknown): PushLang {
   return value === "pt-BR" || value === "pt" ? "pt-BR" : "en";
 }
 
-/** The generic notification (no content from the computer), in the phone's saved language. */
+/**
+ * What a push may be about: a session waiting on the person ("needs you", from the count in
+ * {"t":"push","n"}), and the Miblo+ events the writer names with a fixed kind ({"t":"push","k"}).
+ * A kind is all the relay ever learns of an event, and the phone gets only fixed words for it.
+ */
+export type PushKind = "needs_you" | "approval" | "task_done" | "task_failed";
+/** The kinds a writer may name in {"t":"push","k"} (needs_you comes from the count). */
+export const PUSH_EVENT_KINDS: readonly PushKind[] = ["approval", "task_done", "task_failed"];
+
+const PUSH_WORDS: Record<PushKind, Record<PushLang, string>> = {
+  needs_you: { "pt-BR": "A sessão precisa de você", en: "A session needs you" },
+  approval: { "pt-BR": "Pedido de permissão", en: "Permission request" },
+  task_done: { "pt-BR": "Tarefa concluída", en: "Task finished" },
+  task_failed: { "pt-BR": "A tarefa falhou", en: "Task failed" },
+};
+
+export function isPushEventKind(value: unknown): value is PushKind {
+  return typeof value === "string" && (PUSH_EVENT_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * The notification for a kind, in the phone's saved language: fixed words only, nothing from the
+ * computer (no session, tool, command or text). The service worker opens the app on its own page.
+ */
+export function pushNotification(kind: PushKind, lang: PushLang) {
+  return { t: kind, title: "Miblo", body: PUSH_WORDS[kind][lang], lang };
+}
+
+/** The generic "needs you" notification (kept for callers of the v1 name). */
 export function needsYouNotification(lang: PushLang) {
-  return lang === "pt-BR"
-    ? { t: "needs_you", title: "Miblo", body: "Uma sessão precisa de você", lang }
-    : { t: "needs_you", title: "Miblo", body: "A session needs you", lang };
+  return pushNotification("needs_you", lang);
 }

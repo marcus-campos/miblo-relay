@@ -29,7 +29,7 @@ threat model (v6, with the v7 rows and "v7: adversarial analysis") is at the end
 | Second factors | passkeys: public keys; TOTP: AES-GCM under `MFA_KEY`; recovery codes: HMACs under a key derived from `MFA_KEY` | the server (the TOTP secret, with `MFA_KEY`) |
 | Session cookies, device tokens | SHA-256 in the database | nobody |
 | The server's identity key | `SERVER_IDENTITY_KEY` (Node: `secrets.json`, 0600; Cloudflare: a Worker secret) | the server |
-| Metadata | who is connected when, frame sizes and times, push subscriptions, phone names and browser/system | the server, like any relay |
+| Metadata | who is connected when, frame sizes and times, push subscriptions (and which enrolled phone made each), the kind of each push (permission request, task finished or failed, a session needs you: never what it is about), whether a phone's app is on screen (memory only), phone names and browser/system | the server, like any relay |
 
 ## Adversaries
 

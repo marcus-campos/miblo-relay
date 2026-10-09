@@ -7,6 +7,10 @@
 // its own key (sealUp). Without an identity (not enrolled yet, or restored from the vault) it is a
 // guest: the status, plus the answer to its enrollment, which travels under the pairing window's
 // key (sendEnroll / openEnrolled).
+//
+// The app on screen or not ({"t":"fg"}): said when the socket opens, when the page is shown or
+// hidden, and again every other ping while it stays on screen, so the relay sends no push to a
+// phone that is looking at the app already (it lapses there after 150 s without being said again).
 import { decryptFrame, enrollKey, openEnrolled, openSealed, phoneFrameKey, readerToken, sealEnroll, sealUp, type Frame } from "@/lib/relay-crypto";
 import { isAppLocked } from "./lock-state";
 import type { StoredPairing } from "./store";
@@ -50,6 +54,7 @@ export class RelayClient {
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private pongTimer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
+  private pings = 0;
   private state: LinkState = "connecting";
   private identity: Promise<Identity | null> = Promise.resolve(null);
   /** The relay refused this phone's own token (4401): try once as a guest (the shared token). */
@@ -154,14 +159,22 @@ export class RelayClient {
     return this.state === "open";
   }
 
+  /** Tells the relay whether the app is on the screen now (see the top of this file). */
+  private sendForeground() {
+    this.send({ t: "fg", on: document.visibilityState === "visible" });
+  }
+
   /** Back in the foreground or back online: reconnect now instead of waiting out the backoff. */
   private wake = () => {
-    if (this.stopped || document.visibilityState !== "visible") return;
+    if (this.stopped) return;
+    // Hidden (another app, the screen off): said at once, while the socket still works.
+    if (document.visibilityState !== "visible") return void this.sendForeground();
     if (this.state === "refused" || this.state === "deleted" || this.state === "revoked") return;
     if (!this.ws || this.ws.readyState > WebSocket.OPEN) {
       this.attempt = 0;
       this.connect();
     } else {
+      this.sendForeground();
       this.ping();
     }
   };
@@ -193,6 +206,7 @@ export class RelayClient {
         // This phone's own token when it has one; the pairing's shared one as a guest.
         ws.send(JSON.stringify(id && !this.guest ? { t: "auth", token: id.token, phone: id.phone } : { t: "auth", token: this.pairing.readToken }));
         this.attempt = 0;
+        this.sendForeground();
         this.setState("open");
         this.pingTimer = setInterval(() => this.ping(), PING_MS);
       });
@@ -267,6 +281,7 @@ export class RelayClient {
 
   private ping() {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (++this.pings % 2 === 0 && document.visibilityState === "visible") this.sendForeground();
     this.ws.send('{"t":"ping"}');
     clearTimeout(this.pongTimer);
     // No answer: the socket is dead without knowing it (phone slept, network changed).

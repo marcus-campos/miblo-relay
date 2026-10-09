@@ -10,6 +10,15 @@ function waitText(s: number): string {
   return `${Math.ceil(s / 3600)} h`;
 }
 
+/** The time left on an approval card, to the minute: "45 s", "12 min", "1 h", "1 h 5 min". */
+function leftText(s: number): string {
+  if (s < 120) return `${s} s`;
+  if (s < 3600) return `${Math.ceil(s / 60)} min`;
+  const h = Math.floor(s / 3600);
+  const m = Math.ceil((s % 3600) / 60);
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
 const pt = {
   lang: "pt" as "pt" | "en",
   apps: {
@@ -88,9 +97,12 @@ const pt = {
   approvalsWaiting: (n: number) => (n === 1 ? "1 pedido esperando você" : `${n} pedidos esperando você`),
   see: "Ver",
   notify: {
-    title: "Avisos",
-    enable: "Ativar avisos",
-    enabled: "Avisos ativados. O celular toca quando uma sessão precisar de você.",
+    title: "Notificações push",
+    switchLabel: "Neste celular",
+    enable: "Ativar notificações push",
+    enabled: "Ligadas: o celular avisa quando o app não está na tela.",
+    off: "Desligadas.",
+    iosNote: "No iPhone, as notificações precisam do iOS 16.4 ou mais novo e do app adicionado à Tela de Início (Compartilhar, Adicionar à Tela de Início).",
     denied: "Os avisos estão bloqueados para o Miblo.",
     deniedHow: {
       ios: ["Abra os Ajustes do iPhone.", "Toque em Notificações e depois em Miblo.", "Ligue Permitir Notificações."],
@@ -100,7 +112,7 @@ const pt = {
     } as Record<"ios" | "android-app" | "android" | "other", string[]>,
     unsupported: "Este navegador não recebe avisos. No Android, use o Chrome; no iPhone, instale o app na Tela de Início.",
     iosInstall: "No iPhone, os avisos só funcionam com o app na Tela de Início. Instale primeiro:",
-    explain: "Um aviso simples, sem nada do seu computador: só que uma sessão precisa de você.",
+    explain: "Um aviso curto quando chega um pedido de permissão, quando uma sessão precisa de você ou quando uma tarefa termina. Nada do seu computador vai no aviso: nem o comando, nem o texto da sessão.",
     failed: "Não deu para ativar os avisos. Tente de novo.",
   },
   install: {
@@ -207,6 +219,7 @@ const pt = {
     } as Record<"command" | "edit" | "read" | "web" | "other", string>,
     approvalExpires: (s: number) => `expira em ${waitText(s)}`,
     approvalExpired: "Expirou. Responda no computador.",
+    approvalWaits: (s: number, until: string) => `Responda até ${until} · faltam ${leftText(s)}`,
     approvalPartial: "O pedido é grande demais para mostrar inteiro aqui. Pelo celular você só pode negar; para aprovar, use o computador.",
     approvalUnverified: "O que chegou não confere com o pedido. Só dá para negar.",
     approve: "Aprovar",
@@ -543,9 +556,12 @@ const en: PhoneStrings = {
   approvalsWaiting: (n: number) => (n === 1 ? "1 request waiting for you" : `${n} requests waiting for you`),
   see: "See",
   notify: {
-    title: "Alerts",
-    enable: "Turn on alerts",
-    enabled: "Alerts are on. Your phone buzzes when a session needs you.",
+    title: "Push notifications",
+    switchLabel: "On this phone",
+    enable: "Turn on push notifications",
+    enabled: "On: your phone tells you when the app is not on screen.",
+    off: "Off.",
+    iosNote: "On iPhone, notifications need iOS 16.4 or later and the app added to the Home Screen (Share, Add to Home Screen).",
     denied: "Alerts are blocked for Miblo.",
     deniedHow: {
       ios: ["Open the iPhone Settings.", "Tap Notifications, then Miblo.", "Turn on Allow Notifications."],
@@ -555,7 +571,7 @@ const en: PhoneStrings = {
     },
     unsupported: "This browser can't receive alerts. On Android, use Chrome; on iPhone, install the app on the Home Screen.",
     iosInstall: "On iPhone, alerts only work with the app on the Home Screen. Install it first:",
-    explain: "A plain alert with nothing from your computer in it: just that a session needs you.",
+    explain: "A short alert when a permission request arrives, when a session needs you or when a task ends. Nothing from your computer is in it: not the command, not the session's text.",
     failed: "Couldn't turn alerts on. Try again.",
   },
   install: {
@@ -662,6 +678,7 @@ const en: PhoneStrings = {
     },
     approvalExpires: (s: number) => `expires in ${waitText(s)}`,
     approvalExpired: "Expired. Answer on the computer.",
+    approvalWaits: (s: number, until: string) => `Answer by ${until} · ${leftText(s)} left`,
     approvalPartial: "This request is too large to show in full here. From the phone you can only deny it; approve it on the computer.",
     approvalUnverified: "What arrived doesn't match the request. You can only deny it.",
     approve: "Approve",

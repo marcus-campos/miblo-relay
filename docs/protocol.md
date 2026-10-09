@@ -127,7 +127,7 @@ accept them.)
   reader frames) and `ch` the channel (`status` when the frame has none). A frame moved to another
   room, type or channel fails to decrypt.
 - Writer may send `{"t":"push","n":<needsYouCount>}` (no content): the relay sends a GENERIC
-  Web Push ("Um Claude precisa de você" / "A Claude session needs you", localized by the phone's
+  Web Push ("A sessão precisa de você" / "A session needs you", localized by the phone's
   saved lang) to the room's subscriptions when n increases: at least 60 s apart, at most 30 per room
   per UTC day, and within daily budgets (counters kept in Durable Objects). v5: each delivery is
   charged to its payer, to its endpoint and to a pool. The payer is the Miblo+ account (an opaque
@@ -144,7 +144,22 @@ count: 30 for an IPv6 /64 (60 a /56, 120 a /48) and 300 for an IPv4 address, whi
   each log one warning a day (`relay_push_budget`, no room or IP) for alerting.
 - Reader may send `{"t":"sub","sub":<PushSubscription JSON>,"lang":"pt-BR|en"}` to register Web
   Push (VAPID; public key served at /api/relay/vapid). Subscriptions are stored per room only. v5:
-  the key must be a real P-256 point, and a room keeps its newest 2 (free) or 5 (Miblo+).
+  the key must be a real P-256 point, and a room keeps its newest 2 (free) or 5 (Miblo+). An
+  enrolled phone's subscription is stored with its phone id: it is deleted when the writer stops
+  listing that phone (revoked), and `{"t":"unsub","sub":{"endpoint"}}` (push turned off in the
+  app's settings) deletes that endpoint's subscription and every one that phone made in the room.
+  The computer never sees an endpoint.
+- Push kinds: besides the count, the writer may send `{"t":"push","k":"approval"|"task_done"|"task_failed"}`
+  (a permission request went to the phones; a phone task ended or failed). The kind is all the
+  relay learns, and the notification carries only fixed words for it: "Pedido de permissão" /
+  "Permission request", "Tarefa concluída" / "Task finished", "A tarefa falhou" / "Task failed",
+  "A sessão precisa de você" / "A session needs you" for the count. Any other kind is ignored. One
+  a minute per kind, within the room's 30 a day and the same budgets; an approval also counts as
+  that moment's "needs you" (no second alert right after it).
+- `{"t":"fg","on":true|false}` (a phone): its app is on the screen, or not. Kept on the socket only
+  (never stored). Sent when the connection opens, when the page is shown or hidden, and every
+  other ping while it stays on screen; it lapses after 150 s. A phone whose app is on screen gets
+  no push (it sees the card); when every phone is, nothing is sent and nothing is spent.
 - `DELETE /api/relay/<room>` with `Authorization: Bearer <writeToken>` wipes the room (frame, read
   hash, push subscriptions, counters): 204 when the token derives the room (also when nothing was
   stored), 401 otherwise, whether or not the room exists.
@@ -238,8 +253,12 @@ Every phone that uses the app has a PIN (`app/src/components/phone/AppLock.tsx`,
   frame too large (also per channel, v3). HTTP 401/403 mirror 4401/4403 for header auth; HTTP 429
   = too many connections/requests.
 - `{"t":"ping"}` is answered with `{"t":"pong"}` at any time (keep-alive; no auth needed).
-- Push: payload = encrypted JSON `{"t":"needs_you","title":"Miblo","body":"…","lang":"pt-BR|en"}`
-  (aes128gcm, TTL 1 h, `Topic: needs-you`). Endpoints must belong to a browser push service.
+- Push: payload = encrypted JSON `{"t":<kind>,"title":"Miblo","body":<the fixed words>,"lang":"pt-BR|en"}`
+  with `kind` = `needs_you`, `approval`, `task_done` or `task_failed` (aes128gcm, TTL 1 h,
+  `Topic: needs-you`, or `task` for a task's end). The service worker shows its own fixed words
+  for the kind (whatever else the payload says), one notification for "needs you" and approvals
+  (replaced, buzzing again only when none is showing) and one for tasks, and a tap opens the app's
+  own page (`/app/?open=<kind>`, the "Agora" tab). Endpoints must belong to a browser push service.
 - Shared test vector: claude_gadget `plugin/test/fixtures/relay-frame.json` = miblo-platform
   `web/tests/fixtures/relay-frame.json` (identical files; both test suites decrypt it).
 
@@ -266,7 +285,7 @@ Durable Object, lapsing on its own at `until`) carry, besides the status:
 | `reply` | phone → writer (`up`) | `reply` | text typed on the phone for one session (beta), signed by the phone |
 | `reply` | writer → phones | `reply_ack` | `sent` (handed to Claude Code), `delivered` (seen in the transcript) or `refused` |
 | `approval` | writer → phones | `approval`, `approval_done`, `enrolled` | a permission prompt to answer; its outcome; the answer to an enrollment |
-| `approval` | phone → writer (`up`) | `decision`, `enroll` | allow / deny, signed (an allow also with the passkey); this phone's enrollment |
+| `approval` | phone → writer (`up`) | `decision`, `enroll`, `approval_sync` | allow / deny, signed (an allow also with the passkey); this phone's enrollment; "send me the approvals still waiting" |
 | `chat` | – | – | reserved |
 
 All plaintexts are UTF-8 JSON (`v: 4` or `v: 5`). v5: none of these frames uses the shared pairing
@@ -416,6 +435,15 @@ keys:
   sorted at every level), whole when `full` (≤ 30 KiB), else only its start. `hash` =
   base64url(SHA-256(canonical input)). `expires` ≤ `at` + 1 h (the computer's "how long a prompt waits" setting, 15 s to 1 h). `approval_done`:
   `{v, kind, at, id, outcome}` with `allow`, `deny`, `timeout` or `answered`.
+  The phone shows the card, with its deadline as a time of day and the time left, until `expires`
+  or until `approval_done` comes. The relay keeps no approval frame (a phone not connected at that
+  instant misses it), so the computer keeps the frame it sent for as long as the request waits and
+  sends it again, unchanged and sealed to that phone alone: to an enrolled phone that appears in
+  the relay's presence, and when a phone asks with `approval_sync` `{v, kind:"approval_sync",
+  phone, at}` (the phone sends it each time its connection opens with Miblo+ on, and when the app
+  is unlocked; the computer answers a phone at most every 5 s). The phone keeps one card per `id`
+  and never brings back one it answered. A prompt that arrives while no phone is connected still
+  falls back to the computer at once (`no_phone`), as before.
 - `decision`: `{v, kind:"decision", phone, id, session, tool, hash, decision:"allow"|"deny", nonce,
   ts, mac, wa?}` with `mac` = base64url(HMAC-SHA256(phone's macKey, `"miblo-decision-v4|" + room +
   "|" + phone + "|" + id + "|" + session + "|" + tool + "|" + hash + "|" + decision + "|" + nonce +
@@ -1250,7 +1278,8 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | A network shared by many people (CGNAT, an office) is locked out of new rooms by its neighbours | only rooms a phone joined count over the 30-day period (300 for an IPv4 address); rooms never joined cost a day's slot only and give it back when they go; the day cap and each room's own limits do the rest | web `relay.test.ts` (30 joined rooms on one IPv4, the neighbour pairs the next day; never-joined rooms given back) |
 | A phone reply hides a payload from the gadget or the notification with look-alike blanks or padding | invisible characters removed, look-alike blanks made spaces, runs of 3+ blanks shortened before delivery; the summaries show the true delivered length and flag one that hides part of the text; the audit log keeps it whole | plugin `show-on-computer.test.js` |
 | Relay replays an old decision, reply or history frame | decisions single-use (settled request) with unique nonces and `ts` ±2 min; reply nonces kept 10 min across restarts and anything older than the bridge refused; history newest-wins per session | plugin `plus.test.js`, web `phone-plus.test.ts` |
-| Relay withholds or delays frames | an approval expires (≤ 1 h, the setting; phone and computer alike) and then Claude Code asks locally; never auto-allow | plugin `plus.test.js` |
+| Relay withholds or delays frames | an approval expires (≤ 1 h, the setting; phone and computer alike) and then Claude Code asks locally; never auto-allow. A frame a phone missed (app closed, socket down) is sent again by the computer, unchanged and sealed to that phone, while the request waits | plugin `plus.test.js` (resend, approval_sync), web `phone-push.test.ts` |
+| A push notification leaks what the computer is doing, or tells the relay | the writer names only a fixed kind; the relay sends fixed words for it and the service worker shows its own words whatever the payload says; no session, tool, command or text; the computer never learns the endpoint; a revoked phone's subscription is deleted with it | web `relay.test.ts` (kinds, unknown kinds ignored, revoke, unsub, the phone on screen), `phone-push.test.ts` (service worker) |
 | Confused deputy: a decision for one session or command applied to another | MAC and checks bind phone, id, session, tool and input hash; the passkey challenge binds id, tool, hash, room and nonce; replies matched to exactly one tracked session | plugin `plus.test.js`, e2e |
 | Approval spoofing: hidden text in a command (newlines, bidi overrides, zero-width, ESC), stacked combining marks painting over the card, or a misleading AI description | the phone checks the hash of what it received and shows every character (escapes for invisible ones and for marks past two per character, deny-only when present), every box clips its own ink, the command first and whole, counts and non-ASCII warnings on every field, the description labelled as AI text and secondary, Approve only after the end was on screen | web `phone-plus.test.ts`, e2e (bidi and stacked marks deny-only, card clipped, file path and diff) |
 | Prompt injection via message text shown on the phone | history cleaned of controls, bidi and zero-width characters and rendered as React text only; labelled as AI text | web `phone-plus.test.ts`, e2e (`<img onerror>` stays text) |

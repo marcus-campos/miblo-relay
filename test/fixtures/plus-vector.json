@@ -1,0 +1,158 @@
+{
+  "note": "Protocol v5 (Miblo+). Per phone: macKey (32 random bytes the phone made) and an ES256 passkey. enrollChallenge = SHA-256(UTF-8 \"miblo-enroll-v4|<room>|<phone>|<en>|<macKey>\"); approveChallenge = SHA-256(UTF-8 \"miblo-approve-v4|<id>|<tool>|<hash>|<room>|<nonce>\") with the request nonce; fp = base32 (ABCDEFGHJKLMNPQRSTUVWXYZ23456789) of the first 40 bits of SHA-256(\"miblo-fp-v4|<credId>|<x>|<y>\") as XXXX-XXXX. hash = base64url(SHA-256(canonicalJson(tool_input))). mac = base64url(HMAC-SHA256(macKey, macText)). The registration and assertion were made by a software authenticator (plugin test/fakes/soft-authenticator.js) for rpId miblo.ai, origin https://miblo.ai. upFrame = the decision encrypted as {t:up, ch:approval}. Secrets are test-only. Shared with miblo-platform web/tests/fixtures/plus-vector.json (keep both identical). v5 additions: reply MAC text adds the reply token rt before H(text) (prefix miblo-reply-v5); replyChallenge = SHA-256(UTF-8 \"miblo-reply-wa-v5|<room>|<phone>|<session>|<nonce>|<ts>|<rt>|<H(text)>\"); readerToken = base64url(HMAC-SHA256(macKey, \"miblo-reader-v5|<room>|<phone>\")); phoneKey = HMAC-SHA256(macKey, \"miblo-phone-key-v5|<room>|<phone>\") (AES-256-GCM); enrollKey = HKDF-SHA256(ikm = en bytes, salt = UTF-8 room, info = \"miblo-enroll-key-v5\", 32 bytes). Sealed frames (AES-256-GCM, iv 12 bytes, ct = ciphertext || tag): sealed = {t:msg, ch, iv, ct, to:{phone: base64url(iv_p || wrap)}} with the content key wrapped under phoneKey, AAD content \"v5|msg|<ch>|<room>\", AAD wrap \"v5|ck|<ch>|<room>|<phone>\"; up = {t:up, ch, iv, ct} under phoneKey with AAD \"v5|up|<ch>|<room>|<phone>\"; enroll under enrollKey with AAD \"v5|enroll|<room>\"; enrolled = {t:msg, ch:approval, g:1, iv, ct} under enrollKey with AAD \"v5|enrolled|<room>\". The v5 frames were made with fixed bytes in place of the random ones.",
+  "secrets": {
+    "room": "L1gSdhO9Ek4aT4GMMWUbwT",
+    "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+  },
+  "rpId": "miblo.ai",
+  "origin": "https://miblo.ai",
+  "phone": {
+    "id": "cGhvbmUtcGhvbmUtcGhvbg",
+    "macKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+  },
+  "en": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+  "enroll": {
+    "challenge": "HIk493wMc5ie2vJ9yUOhRekvqUhI_Ldt_WxrO9EYCuM",
+    "att": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViesLEker_h2JoUbkAvdC69nxIesx7KL7Jc9EsiyL3eHSdFAAAAAAAAAAAAAAAAAAAAAAAAAAAAGm1pYmxvLXRlc3QtY3JlZGVudGlhbC0wMDAxpQECAyYgASFYIIaN7zlDg1HGxQhxnkBf4C6Dzmq67b4mikEKKDDDE_ckIlggbz2RxDjZXFk3qNjTMciKphHvtMbc4r6FyphNVbpI6jc",
+    "cdj": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiSElrNDkzd01jNWllMnZKOXlVT2hSZWt2cVVoSV9MZHRfV3hyTzlFWUN1TSIsIm9yaWdpbiI6Imh0dHBzOi8vbWlibG8uYWkiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "credId": "bWlibG8tdGVzdC1jcmVkZW50aWFsLTAwMDE",
+    "x": "ho3vOUODUcbFCHGeQF_gLoPOarrtviaKQQooMMMT9yQ",
+    "y": "bz2RxDjZXFk3qNjTMciKphHvtMbc4r6FyphNVbpI6jc",
+    "signCount": 0,
+    "fp": "CKW9-VQUZ"
+  },
+  "input": {
+    "description": "Clean and test",
+    "command": "rm -rf build && npm test\necho \"done ✓\""
+  },
+  "canonical": "{\"command\":\"rm -rf build && npm test\\necho \\\"done ✓\\\"\",\"description\":\"Clean and test\"}",
+  "hash": "BG_YCrup6XZcMyo9RuCnu4gvhaXL6Ishi3FRlJbScgE",
+  "request": {
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "session": "a1b2c3d4",
+    "tool": "Bash",
+    "nonce": "cmVxdWVzdC1ub25jZS0wMQ"
+  },
+  "approveChallenge": "LBwCk48vEDplX6Il3VBkGwgBWkv2FmIT2pbJcYWL_os",
+  "fields": {
+    "phone": "cGhvbmUtcGhvbmUtcGhvbg",
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "session": "a1b2c3d4",
+    "tool": "Bash",
+    "hash": "BG_YCrup6XZcMyo9RuCnu4gvhaXL6Ishi3FRlJbScgE",
+    "decision": "allow",
+    "nonce": "bm9uY2Utbm9uY2Utbm9uY2U",
+    "ts": 1790000000500
+  },
+  "macText": "miblo-decision-v4|L1gSdhO9Ek4aT4GMMWUbwT|cGhvbmUtcGhvbmUtcGhvbg|AAAAAAAAAAAAAAAAAAAAAA|a1b2c3d4|Bash|BG_YCrup6XZcMyo9RuCnu4gvhaXL6Ishi3FRlJbScgE|allow|bm9uY2Utbm9uY2Utbm9uY2U|1790000000500",
+  "mac": "Fsxrnig9eUIZPDFnpVOe5GWmqOoOnOZMRooHy4x4a9Q",
+  "decision": {
+    "v": 4,
+    "kind": "decision",
+    "phone": "cGhvbmUtcGhvbmUtcGhvbg",
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "session": "a1b2c3d4",
+    "tool": "Bash",
+    "hash": "BG_YCrup6XZcMyo9RuCnu4gvhaXL6Ishi3FRlJbScgE",
+    "decision": "allow",
+    "nonce": "bm9uY2Utbm9uY2Utbm9uY2U",
+    "ts": 1790000000500,
+    "mac": "Fsxrnig9eUIZPDFnpVOe5GWmqOoOnOZMRooHy4x4a9Q",
+    "wa": {
+      "cred": "bWlibG8tdGVzdC1jcmVkZW50aWFsLTAwMDE",
+      "ad": "sLEker_h2JoUbkAvdC69nxIesx7KL7Jc9EsiyL3eHScFAAAAAQ",
+      "cdj": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiTEJ3Q2s0OHZFRHBsWDZJbDNWQmtHd2dCV2t2MkZtSVQycGJKY1lXTF9vcyIsIm9yaWdpbiI6Imh0dHBzOi8vbWlibG8uYWkiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+      "sig": "MEUCIQD3ts4NSUzj9HEC-so77PA_e_TjceO2i5KnUmdX5pAgwQIgckVpmjPJR3VBG_cBOfQVNjT9grFtnkEPtbuepIIrPjY"
+    }
+  },
+  "upFrame": {
+    "t": "up",
+    "ch": "approval",
+    "iv": "KCkqKywtLi8wMTIz",
+    "ct": "m5Ac5slbTaerADRsBZWohybdqvdGjXNffYjVwOSIYxH9wolWsoTWA9lq4NI0W-Z-hOh7ZFOPr9cZ7XJpD7YYdpM50dDMwmM3mzNCiA6ZTByytLyDBeLy8K-Qr-VHrr4Ir4jQ0AsgbDUQGqJW_2z-8ik6uVmVawA4-i9tjSErnjIGInaK0iWdqzDjB-wGTPM641ICe8lYPkHlpfEeysT5PZinRWemM6ohz19S7cpNLkP1UlflwU9hrMUIVSfLk4vss7eeOzBLxCk3b_xkIM4QkyaEUKzR-8rFVAK9I6T2QWMOfYLgT5u9YTan9uTGmGdzp_VjaO1c6C2L1cpvzMHFBd9GFmAyUP3AiQ3lKCgnvFmXTtMN8BJkaYFJlpO1Sh-1kTRGtY9nA4-TnPR47fOJibPsVEamA1HxxZItUQi_3JJblMSo03zdOcF9waSWQAod34HQcVdpmQQXTQ7DgGGQ0eDidjalW_ztUVeHDt5LcKWMy3WnPBDWQ-yonnbeUosl6qfDgzKx-awkWdi42QGtShP2TLHEf-x0nJtTMMbi5Sl7zT7FcIArdzy83CR_f-dA1GchXexeE0vGzl3C2UX7hskjtB65Qzv9cWmFasW_KXE0284DK01J3oFNXh6CJlnGoIeVPjWmw8QtaRkOFeHTDS4v-hAgP9NGRcd7TIYlNVSCQsFSZOc_bj2VmyuG_IqsvSGcgRfLx4GMHZhN5bzwIV4yUjzdf9htg02VbLjT0ZV9RvkB6Dj5pT1Td3Td2fCYRPUNJnswUdHwWCc7027csjfOu5XMj9AhHURhddO3Qx-n0aCJo8i35fXB8pf0weSAy6jN7PIPAPIHykcMmqOg-Mc25xsNQg_nnZLyZNndaV29MBdxAD8OQII6DklrBV3xYBWdlZaKd6wCLGf9V6UPV8xhhBa-tdXPWBaO_kF5CyypqA5GSnsi"
+  },
+  "reply": {
+    "phone": "cGhvbmUtcGhvbmUtcGhvbg",
+    "session": "a1b2c3d4",
+    "nonce": "cmVwbHktbm9uY2UtMDAwMQ",
+    "ts": 1790000000600,
+    "rt": "cmVwbHktdG9rZW4tMDAwMQ",
+    "text": "ship it ✓"
+  },
+  "replyMacText": "miblo-reply-v5|L1gSdhO9Ek4aT4GMMWUbwT|cGhvbmUtcGhvbmUtcGhvbg|a1b2c3d4|cmVwbHktbm9uY2UtMDAwMQ|1790000000600|cmVwbHktdG9rZW4tMDAwMQ|UaImRK84SCElWBEM-o9k46aWSnYPJI8SvtwcfsKLt4E",
+  "replyMac": "CBcDDE3pIX2gQQwNuJNZR4hbTcTtcaqiyyTHd-nGw4w",
+  "replyChallenge": "lzOmFFyyrgtlwcoHIiyhM1Y8rOwVJ_QmCL1aqeXUuko",
+  "v5": {
+    "readerToken": "5tqyFHMIcxn3LOuOQ6yyKsi76At91K9odZywq4o_wLU",
+    "phoneKey": "Ed33dMekpinqhlT07Y2uE-2eS8xHr_-EU15S3N-fAMg",
+    "enrollKey": "N3dnhbOFGxxf1FiNM00faHW3vfVnctBtaNT5ZR61kGA",
+    "sealed": {
+      "payload": {
+        "v": 5,
+        "kind": "approval_done",
+        "at": 1790000000700,
+        "id": "AAAAAAAAAAAAAAAAAAAAAA",
+        "outcome": "deny"
+      },
+      "frame": {
+        "t": "msg",
+        "ch": "approval",
+        "iv": "YGFiY2RlZmdoaWpr",
+        "ct": "1wp_Jz2hvIRi6BdSJ7x-an9cnH5hX_1RahWl3YnuJZpUzdcvTPLvuZjJkBgrGTAa0gQEKFd8j_UkV1gqvcCN8QXg7g8ODh6GA0jcOPo7YznyJyKGB1_9m2BzODGlMVwpqAs0Fp3Xz5AGxy81w32tSg",
+        "to": {
+          "cGhvbmUtcGhvbmUtcGhvbg": "bG1ub3BxcnN0dXZ3zowYLQK3xEiEtPjq6MZw7vNUFrstAINH4-KmpaPRc24Q8KfV-cP7SiXx6Y8ZmPW1"
+        }
+      }
+    },
+    "up": {
+      "payload": {
+        "v": 4,
+        "kind": "open",
+        "session": "a1b2c3d4",
+        "at": 1790000000800,
+        "nonce": "b3Blbi1ub25jZS0wMDAwMQ"
+      },
+      "frame": {
+        "t": "up",
+        "ch": "history",
+        "iv": "eHl6e3x9fn-AgYKD",
+        "ct": "pZGD8XglpEz63EukMjchluexajKkVOMl11yxRRhki0wZqvf7mOA6KRKO4qtD4Zo0lfuUQ6Ru48HV_LCYkcOMzxffQlN_5do-pkdAKbNKcu5xibJ8fynhWHf7qpMNawNIicmBPU8tTLf390lijGU"
+      }
+    },
+    "enroll": {
+      "payload": {
+        "v": 5,
+        "kind": "enroll",
+        "phone": "cGhvbmUtcGhvbmUtcGhvbg",
+        "name": "Ana",
+        "macKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+        "att": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViesLEker_h2JoUbkAvdC69nxIesx7KL7Jc9EsiyL3eHSdFAAAAAAAAAAAAAAAAAAAAAAAAAAAAGm1pYmxvLXRlc3QtY3JlZGVudGlhbC0wMDAxpQECAyYgASFYIIaN7zlDg1HGxQhxnkBf4C6Dzmq67b4mikEKKDDDE_ckIlggbz2RxDjZXFk3qNjTMciKphHvtMbc4r6FyphNVbpI6jc",
+        "cdj": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiSElrNDkzd01jNWllMnZKOXlVT2hSZWt2cVVoSV9MZHRfV3hyTzlFWUN1TSIsIm9yaWdpbiI6Imh0dHBzOi8vbWlibG8uYWkiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+        "ts": 1790000000900
+      },
+      "frame": {
+        "t": "up",
+        "ch": "approval",
+        "iv": "hIWGh4iJiouMjY6P",
+        "ct": "8cOECLFUJEVH3OpaTVSEavsp3EvIaDACjOIvEO9HXbskvnqyqjUA27CxXFOs9l1zAcCrk-BeNHBZXGQ086g2NXNuD_EtOd1_YBeNNXh200Npzqn7pZylYRCO1CWOgdd3yA3M8I9Q3g-IIh0HsSpGoO7ZU_t-jrXjOZKEM2oJ-UdY6xu_f4va8fairJQwlQp4JXVHwtuBKKRn9XJWhkG84ufI0gAbOdtsWfRVjEI3gFNziNDGBeWRj8P0deaun6RNA_AgZdfmDyYqzWhpCHc-5gq7MbPqEuibeEZp6cEQUjeuwyHhrPU5RKia-pxl5jVr9AIeLIrxNTaNABc-hGnlJCxwxRTIEuLrSonoSp6UC4N5sg3cHgsY0sFsrdrcSh7q9ZmQdlfKq6tI8cTfcPaGDh7FEQ4iWyyikPRPRfcx8Bck4S8gj3GwdWGfMCws4lWee8Fww709jlIh5DuI8dw1wiBKkglcJKifTeZUAq4hEanpIIWkbV3GxOIc6xdBmGFfdpmaainm6O63BtQv8p5-pS8GrfsQifjoW22EjRFm6MNaNT4pXVlmRLlZXOb1tm1oizpgVg2RYfq21LOVFxzrOGC_SaZzoPvwMpnmt_3EOHcHwBQKJluNZiXgShWf5oOoKsogWIJj-otRTSZXp6Zb-BhQwoMeEEkoIVh0uh_YgE3urnmU1PpByBH2sovGoZ-OMXeLBOJjmKzWzdrkvzRQ4fISneMCGFBuUD01Z5v1EaLHn9YG9lZ4vXepW_yD6U_EH0qQyZLcIHdCMpEOMaziqvLLxbjaSau3wPHG0g"
+      }
+    },
+    "enrolled": {
+      "payload": {
+        "v": 5,
+        "kind": "enrolled",
+        "at": 1790000001000,
+        "phone": "cGhvbmUtcGhvbmUtcGhvbg",
+        "ok": true,
+        "fp": "CKW9-VQUZ"
+      },
+      "frame": {
+        "t": "msg",
+        "ch": "approval",
+        "g": 1,
+        "iv": "kJGSk5SVlpeYmZqb",
+        "ct": "mPOYjtPrK3zIjREEffW_Hzepdod88wYGKtgQ2jokRnvOL_c0n3MfvppCWqDL8RXbM3zhMxW8ESI5jobqfTW0LD53MEkJ7cBCS4n8qhgU07yNxLaozf0NQFVCwLwo2FS1-HIoMhrT_dHKUuHcKHr556x2-0-CmfPQ"
+      }
+    }
+  }
+}

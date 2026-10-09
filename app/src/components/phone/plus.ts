@@ -479,6 +479,16 @@ export async function stopPayload(signer: Signer, room: string, task: string, no
   return { v: 6, kind: "task_stop", ...f, mac: await phoneMac(signer.macKey, stopMacText(room, f)) };
 }
 
+/**
+ * Asks the computer for the approvals still waiting (sealed to this phone, on the approval
+ * channel): sent when this phone's connection opens with Miblo+ on, and when the app is unlocked.
+ * The computer sends each waiting request again, the same frame, to this phone alone; nothing in it
+ * but who asks and when.
+ */
+export function syncPayload(phone: string, at: number) {
+  return { v: 4, kind: "approval_sync", phone, at };
+}
+
 /** A pending approval, checked: the input shown must hash to the hash the decision will carry. */
 export async function parseApproval(payload: unknown, now: number): Promise<ApprovalView | null> {
   const p = obj(payload);
