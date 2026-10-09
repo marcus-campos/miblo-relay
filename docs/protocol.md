@@ -875,6 +875,22 @@ Rules (plugin `lib/plus/tasks.js`):
   within 2 minutes and not older than the bridge, the token, the tool, the folder, the passkey, the
   limits; then answers `task_ack` (`started` with the task id and session, or `refused` with a
   reason) on `reply`.
+- **Automatic tasks (1.26).** A setting `tasksAuto` (default off, needs tasks on) lets a Claude Code
+  task run with no approvals: `claude -p --permission-mode bypassPermissions` and the other flags
+  unchanged, in the allowed folder, under the same limits and "Parar"; nothing prompts, so the
+  approval hook never fires, and the task can do everything Claude Code can do in that folder
+  without asking. It is turned on only from the person's terminal (`miblo plus tasks auto on`,
+  `miblo plus set tasksauto=on`) or the desktop app's Phone switch, confirmed on a phone (v7
+  `what.on` = `"tasksAuto"`), never under an AI agent; `plus.json` signs it with `mac3`. Off
+  (`tasks auto off`, the app, `remote off`) applies at once and stops a running automatic task.
+  The status frame's `plus` and `task_info` say `tasksAuto: true` / `auto: true` while it is on;
+  only then does the new-task sheet show "Automático (sem aprovações)" (Claude Code only). The task
+  then carries `auto: true`, and both the MAC text and the passkey challenge end in `"|auto"`
+  (appended only when true; shared vector `autoTask`). The computer refuses `auto` while the setting
+  is off (`auto_off`) or for another tool (`auto_unsupported`), audited as `task_auto_refused`; a
+  reply continues an automatic task in the same mode only while the setting is still on. Automatic
+  tasks carry `auto: true` in `task_info.tasks[]` and the history's `task`, and `auto: 1` in the
+  audit (`task` `started` / `continued`).
 - **Limits.** One task at a time per computer, at most 10 started per hour and 30 per day; a task
   is stopped after `taskMaxMin` minutes (default 30, 5 to 120) or 8 MB of output.
 - **Stop.** "Parar" on the phone sends `{v:6, kind:"task_stop", phone, task, nonce, ts, mac}`
@@ -1228,6 +1244,7 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | Compromised origin, or a stolen unlocked phone, starts work on the computer through "Nova tarefa" (v6) | off by default and turned on only at the desk with the gadget code; a passkey assertion with UV over the tool, folder, text, nonce, time and a single-use token the computer issued; folders only from the computer's allow-list; the tool's safest mode (Claude Code's default mode with its prompts going to the phone's approvals and the rest denied, the folder's own settings and MCP servers not loaded; Codex read-only; Copilot read-only; Gemini CLI not offered); one task at a time, 10 an hour, a time limit; every task shown on the gadget, as a notification and in the audit log; `miblo plus remote off` and "Parar" stop it. Residual as for replies: a compromised origin can swap the text the person's biometric signs | plugin `tasks.test.js` (every refusal, passkey, replay, rate, time limit, stop, kill switch), web `phone-tasks.test.ts`, e2e (fake tools) |
 | Command injection through a task's text, tool or folder (v6) | the computer builds the argv from a fixed table, runs it without a shell, passes the text on stdin (Copilot: as the value of `-p`), and names tools and folders by id only; the folder's real path is checked again before each run (a link swapped in is refused) | plugin `tasks.test.js` (shell metacharacters stay text, leading dashes, symlink escape, unknown ids) |
 | A runaway or forgotten task keeps spending (v6) | time limit (default 30 min), output cap, one at a time, hourly and daily caps, "Parar", `miblo plus tasks stop`, `miblo plus remote off`; the process group is killed | plugin `tasks.test.js` |
+| (1.26) An automatic task does damage: it runs Claude Code in `bypassPermissions`, so it can do everything Claude Code can do in that folder without asking (edit, delete, run commands, reach the network and whatever those reach with the person's rights) | off by default; on only from the person's terminal or the desktop app, confirmed on a phone, never under an AI agent; `mac3` over `tasksAuto`; each automatic task under its phone's MAC and passkey with `auto` itself signed; Claude Code only, allowed folders only, the time limit, one at a time, hourly and daily caps; "Parar", `tasks auto off` and `remote off` stop it; labelled automatic on the computer, the phone, the desktop app and the audit | plugin `tasks-auto.test.js`, web `phone-tasks-auto.test.ts` |
 | Secrets in the conversation reach the phone (v6 history carries commands, outputs and diffs) | redaction (above) of whole texts after invisible characters are stripped: key blocks, known token shapes, auth and cookie headers, quoted and unquoted values of secret-named keys in env, JSON, YAML, code and flags, CLI password flags, URL credentials, long high-entropy strings; also the snapshot's tool detail and the task audit log; outputs are short tails of commands only; thinking and subagents never. Residual: a secret with no recognisable name, shape or entropy (a short dictionary word as a password in prose) | plugin `redact.test.js`, `redact-audit.test.js` (the audit corpus, a corpus of ordinary code that must pass unchanged), `history.test.js` |
 | Markdown in an AI message injects markup, loads a tracking image or hides a phishing link (v6) | React-only renderer, no HTML; images never loaded; links only http(s), shown with their domain and opened after a tap that shows the whole address | web `chat-markdown.test.tsx`, e2e (`<img onerror>` and `![x](https://…)` stay text) |
 | Secrets in logs | the plugin never logs tokens, keys or message text; the audit log keeps hashes, a short summary and phone ids | plugin `plus.test.js` |

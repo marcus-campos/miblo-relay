@@ -755,10 +755,10 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     void client.sendUp("reply", taskInfoPayload(p.phone.id, wallClock(), lang === "en" ? "en" : "pt"));
   };
 
-  const sendTask = async (p: StoredPairing, tool: string, folder: string, text: string): Promise<TaskSendResult> => {
+  const sendTask = async (p: StoredPairing, tool: string, folder: string, text: string, auto = false): Promise<TaskSendResult> => {
     if (!p.phone?.credId) return "offline";
     const info = plus[p.room]?.taskInfo ?? null;
-    const built = await taskPayload({ phone: p.phone.id, macKey: p.phone.macKey }, p.room, tool, folder, info?.tt ?? null, text, wallClock());
+    const built = await taskPayload({ phone: p.phone.id, macKey: p.phone.macKey }, p.room, tool, folder, info?.tt ?? null, text, wallClock(), auto);
     if ("error" in built) return built.error;
     // The passkey, with the person's biometric or PIN, over the AI, the folder and this very text.
     let wa;
@@ -1176,8 +1176,9 @@ export function PhoneApp({ lang }: { lang: Locale }) {
             info={room?.taskInfo ?? null}
             online={phoneOnline && link === "open"}
             canSign={!block}
+            allowAuto={caps.tasksAuto}
             onClose={() => setTaskOpen(false)}
-            onSend={(tool, folder, text) => sendTask(current, tool, folder, text)}
+            onSend={(tool, folder, text, auto) => sendTask(current, tool, folder, text, auto)}
             onOpenTask={(id) => openConversation(id)}
           />
         ) : (

@@ -254,12 +254,13 @@ export function phoneRegChallenge(phone: string, pub: string): Promise<Uint8Arra
   return sha256Bytes(`miblo-phone-v6|${phone}|${pub}`);
 }
 
-export type TaskFields = { phone: string; tool: string; folder: string; nonce: string; ts: number; tt: string; text: string };
+/** `auto` (1.26, an automatic task: no approvals) is appended to both only when true. */
+export type TaskFields = { phone: string; tool: string; folder: string; nonce: string; ts: number; tt: string; text: string; auto?: boolean };
 export async function taskMacText(room: string, f: TaskFields): Promise<string> {
-  return ["miblo-task-v6", room, f.phone, f.tool, f.folder, f.nonce, String(f.ts), f.tt, await sha256Text(f.text)].join("|");
+  return ["miblo-task-v6", room, f.phone, f.tool, f.folder, f.nonce, String(f.ts), f.tt, await sha256Text(f.text), ...(f.auto === true ? ["auto"] : [])].join("|");
 }
 export async function taskChallenge(room: string, f: TaskFields): Promise<Uint8Array<ArrayBuffer>> {
-  return sha256Bytes(`miblo-task-wa-v6|${room}|${f.phone}|${f.tool}|${f.folder}|${f.nonce}|${f.ts}|${f.tt}|${await sha256Text(f.text)}`);
+  return sha256Bytes(`miblo-task-wa-v6|${room}|${f.phone}|${f.tool}|${f.folder}|${f.nonce}|${f.ts}|${f.tt}|${await sha256Text(f.text)}${f.auto === true ? "|auto" : ""}`);
 }
 export type StopFields = { phone: string; task: string; nonce: string; ts: number };
 export function stopMacText(room: string, f: StopFields): string {

@@ -3,7 +3,9 @@
 // "Nova tarefa" (protocol v6): start a new headless AI run on the computer from the phone, in a
 // folder allowed there, and follow it as a conversation. The sheet shows exactly what will run
 // (the AI, its mode, the folder's path, the text) before the phone's passkey is asked; the computer
-// checks all of it again (lib/plus/tasks.js in the plugin).
+// checks all of it again (lib/plus/tasks.js in the plugin). 1.26: while the computer allows
+// automatic tasks (its status frame says `tasksAuto`), a switch sends a Claude Code task that runs
+// there with no approvals; the computer refuses it otherwise.
 import { useMemo, useState } from "react";
 import { Icon, Tech } from "./AppParts";
 import type { TaskInfo, TaskListItem } from "./plus";
@@ -17,6 +19,7 @@ export function TaskSheet({
   info,
   online,
   canSign,
+  allowAuto = false,
   onClose,
   onSend,
   onOpenTask,
@@ -27,25 +30,31 @@ export function TaskSheet({
   online: boolean;
   /** This phone has a passkey and the computer accepted it. */
   canSign: boolean;
+  /** The computer allows automatic tasks (status frame `plus.tasksAuto`). */
+  allowAuto?: boolean;
   onClose: () => void;
-  onSend: (tool: string, folder: string, text: string) => Promise<TaskSendResult>;
+  onSend: (tool: string, folder: string, text: string, auto: boolean) => Promise<TaskSendResult>;
   onOpenTask: (id: string) => void;
 }) {
   const [tool, setTool] = useState("");
   const [folder, setFolder] = useState("");
   const [text, setText] = useState("");
+  const [auto, setAuto] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
   // The first choices until the person picks (the computer's list may change between answers).
   const chosenTool = useMemo(() => info?.tools.find((x) => x.id === tool) ?? info?.tools[0] ?? null, [info, tool]);
   const chosenFolder = useMemo(() => info?.folders.find((x) => x.id === folder) ?? info?.folders[0] ?? null, [info, folder]);
+  // Automatic: only Claude Code has such a mode, and only while the computer allows it.
+  const autoOffered = allowAuto && chosenTool?.id === "claude";
+  const sendAuto = autoOffered && auto;
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chosenTool || !chosenFolder) return;
     setBusy(true);
     setNote({ text: t.task.sending });
-    const r = await onSend(chosenTool.id, chosenFolder.id, text);
+    const r = await onSend(chosenTool.id, chosenFolder.id, text, sendAuto);
     setBusy(false);
     if (r === "ok") {
       setText("");
@@ -118,12 +127,23 @@ export function TaskSheet({
             </label>
             <textarea id="task-text" className={styles.taskArea} value={text} maxLength={4000} onChange={(e) => setText(e.target.value)} placeholder={t.task.placeholder} />
           </div>
+          {autoOffered && (
+            <label className="flex items-start gap-3" data-testid="task-auto">
+              <input type="checkbox" role="switch" className="mt-1 h-5 w-5 shrink-0" checked={auto} onChange={(e) => setAuto(e.target.checked)} aria-describedby="task-auto-help" />
+              <span>
+                <span className="block font-bold">{t.task.auto}</span>
+                <span id="task-auto-help" className="block text-[0.875rem] text-ink-2">
+                  {t.task.autoHelp}
+                </span>
+              </span>
+            </label>
+          )}
           {chosenTool && chosenFolder && (
             // Exactly what the computer will run, before the passkey is asked.
             <div className={styles.willRun} data-testid="task-will-run">
               <p className="font-bold">{t.task.willRun(chosenTool.name, chosenFolder.path)}</p>
-              <p className="mt-1 text-ink-2">{chosenTool.mode}</p>
-              <p className="mt-1 text-ink-2">{t.task.limit(info.maxMin)}</p>
+              <p className="mt-1 text-ink-2">{sendAuto ? t.task.auto : chosenTool.mode}</p>
+              <p className="mt-1 text-ink-2">{sendAuto ? t.task.autoLimit(info.maxMin) : t.task.limit(info.maxMin)}</p>
             </div>
           )}
           {note && (
@@ -154,7 +174,7 @@ export function TaskList({ t, tasks, onOpen }: { t: PhoneStrings; tasks: TaskLis
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-bold">{x.text || x.id}</span>
                 <span className="block truncate text-[0.8125rem] text-ink-2">
-                  {[t.task.states[x.state], x.tool, x.folder].filter(Boolean).join(" · ")}
+                  {[t.task.states[x.state], x.tool, x.auto ? t.task.autoTag : "", x.folder].filter(Boolean).join(" · ")}
                 </span>
               </span>
               <Icon name="chevron" size={18} />

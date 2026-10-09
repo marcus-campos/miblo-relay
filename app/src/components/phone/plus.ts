@@ -88,7 +88,8 @@ export type ReplyAck = { nonce: string; state: "queued" | "sent" | "delivered" |
  * be confirmed again (`rearm`: the computer reads it as off until then); a computer that does not
  * say reads as on.
  */
-export type PlusCaps = { on: boolean; approvals: boolean; replies: boolean; tasks: boolean; history: boolean; phones: string[] };
+/** `tasksAuto` (1.26): the computer allows automatic tasks (Claude Code with no approvals). */
+export type PlusCaps = { on: boolean; approvals: boolean; replies: boolean; tasks: boolean; tasksAuto: boolean; history: boolean; phones: string[] };
 export type EnrollResult = { phone: string; ok: boolean; fp: string | null; reason: string };
 
 export const HISTORY_MAX = 50;
@@ -303,7 +304,7 @@ export function plusCaps(payload: unknown): PlusCaps | null {
   const plus = obj(p?.plus);
   if (!plus || plus.on !== true) return null;
   const phones = Array.isArray(plus.phones) ? plus.phones.filter((x): x is string => typeof x === "string" && PHONE_RE.test(x)).slice(0, 16) : [];
-  return { on: true, approvals: plus.approvals === true, replies: plus.replies === true, tasks: plus.tasks === true, history: plus.history !== false, phones };
+  return { on: true, approvals: plus.approvals === true, replies: plus.replies === true, tasks: plus.tasks === true, tasksAuto: plus.tasks === true && plus.tasksAuto === true, history: plus.history !== false, phones };
 }
 
 export function parseHistory(payload: unknown): HistoryView | null {
@@ -400,7 +401,7 @@ export function parseTask(v: unknown): TaskView | null {
 
 export type TaskTool = { id: string; name: string; mode: string };
 export type TaskFolder = { id: string; name: string; path: string };
-export type TaskListItem = { id: string; tool: string; folder: string; state: TaskState; started: number; ended: number | null; text: string; reason: string | null };
+export type TaskListItem = { id: string; tool: string; folder: string; state: TaskState; started: number; ended: number | null; text: string; reason: string | null; auto: boolean };
 export type TaskInfo = { at: number; on: boolean; tools: TaskTool[]; folders: TaskFolder[]; tt: string | null; maxMin: number; tasks: TaskListItem[] };
 export type TaskAck = { nonce: string; state: "started" | "refused"; reason: string; task: string | null };
 
@@ -429,6 +430,7 @@ export function parseTaskInfo(payload: unknown): TaskInfo | null {
       ended: num(o.ended),
       text: cleanDisplay(o.text, 80),
       reason: typeof o.reason === "string" ? o.reason.slice(0, 40) : null,
+      auto: o.auto === true,
     };
   }).filter((t): t is TaskListItem => t !== null);
   const maxMin = typeof p.maxMin === "number" && Number.isSafeInteger(p.maxMin) && p.maxMin > 0 && p.maxMin <= 240 ? p.maxMin : 30;
@@ -449,7 +451,8 @@ export function taskInfoPayload(phone: string, now: number, lang: "pt" | "en"): 
 
 /**
  * A task, signed by this phone (MAC), and the challenge its passkey must sign over the tool, the
- * folder and this very text (the caller adds the assertion as `wa`).
+ * folder and this very text (the caller adds the assertion as `wa`). `auto` (1.26): an automatic
+ * task (no approvals on the computer); the flag goes in the frame, the MAC and the challenge.
  */
 export async function taskPayload(
   signer: Signer,
@@ -459,13 +462,14 @@ export async function taskPayload(
   tt: string | null,
   text: string,
   now: number,
+  auto = false,
 ): Promise<{ payload: Record<string, unknown>; nonce: string; challenge: Uint8Array<ArrayBuffer> } | { error: "empty" | "too_long" | "no_token" }> {
   const clean = text.replace(/\r\n?/g, "\n").replace(HIDDEN, "").trim();
   if (!clean) return { error: "empty" };
   if (utf8Length(clean) > REPLY_MAX_BYTES) return { error: "too_long" };
   if (!tt) return { error: "no_token" };
   const nonce = randomNonce();
-  const f = { phone: signer.phone, tool, folder, nonce, ts: now, tt, text: clean };
+  const f = { phone: signer.phone, tool, folder, nonce, ts: now, tt, text: clean, ...(auto ? { auto: true } : {}) };
   return { payload: { v: 6, kind: "task", ...f, mac: await phoneMac(signer.macKey, await taskMacText(room, f)) }, nonce, challenge: await taskChallenge(room, f) };
 }
 
@@ -614,7 +618,7 @@ export type ConfirmView = { id: string; nonce: string; what: ConfirmWhat; cap: s
 export type ConfirmDone = { id: string; outcome: string };
 export type ConfirmResult = { id: string; reason: string; left: number };
 
-const ON_IDS = new Set(["approvals", "replies", "history", "permissive", "tasks"]);
+const ON_IDS = new Set(["approvals", "replies", "history", "permissive", "tasks", "tasksAuto"]);
 
 /** A canonical JSON (keys sorted), as the computer hashes `what` into `cap`. */
 function canonical(v: unknown): string {
