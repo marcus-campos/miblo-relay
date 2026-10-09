@@ -1191,7 +1191,47 @@ person denied Automation) cannot go back to the queue: the phone stays at "Envia
 says so ("Não deu para digitar a resposta na sessão X"). The app never types a text with a line
 break or a control character.
 
-## Threat model (v6; v7 rows at the end)
+## v8: the panic button
+
+A red **Pânico** button on the phone (Meu computador, under the sessions; Miblo+ rooms only, a phone
+with a passkey) turns the computer's bridge off and ends every AI session Miblo knows there. Only
+the computer can turn it back on. Plugin: `lib/plus/panic.js`; phone: `panic-model.ts`,
+`PanicButton.tsx`.
+
+1. The person holds the button for 2 s (letting go earlier does nothing), then confirms with the
+   phone's passkey and user verification (biometric or PIN).
+2. The phone sends, on the `reply` channel, sealed to its own key:
+   `{ v: 8, kind: "panic", phone, nonce, ts, mac, wa }` with `mac` = HMAC-SHA256(phone MAC key,
+   `miblo-panic-v8|room|phone|nonce|ts`) and `wa` an assertion over
+   SHA-256(`miblo-panic-wa-v8|room|phone|nonce|ts`).
+3. The computer checks it exactly like a reply: the phone the relay authenticated, enrolled, with a
+   passkey; the MAC; a new nonce (a replay gets no answer); `ts` within 2 minutes and not older than
+   the running bridge; the assertion (rp, origin, UP and UV, counter). No reply token: a panic
+   answers no conversation, and it only narrows what runs on the computer.
+4. Refused: `{ v: 8, kind: "panic_ack", at, nonce, state: "refused", reason }` to that phone.
+   Accepted: `{ kind: "panic_ack", state: "accepted", by: "phone", nonce, at }` to every enrolled
+   phone, then the computer ends the sessions (SIGTERM, SIGKILL 3 s later, to each tracked session's
+   process tree; `taskkill /T`, then `/T /F` on Windows), shows "Miblo desligado pelo celular" on
+   the gadgets and in a desktop notification, writes `<data>/panic.json` (the lock, written at the
+   start already) and sends `{ state: "done", ended }` before the bridge exits. A panic started at
+   the computer (`miblo panic`, the desktop app) sends the same `accepted` and `done` with
+   `by: "computer"` and no nonce.
+5. The phone shows "Ponte desligada. Para religar, use o app Miblo no computador." and offers no
+   reply, approval or task for that computer (kept across reloads, by room, with the answer's `at`).
+   It shows the computer back once a status frame arrives whose `at` is newer than that: the bridge
+   sends no status while it ends the sessions, and the relay's retained status is older.
+6. While `panic.json` exists nothing starts the bridge (its start-up, the hooks, the CLI, the
+   desktop app's `apps start`). The desktop app's red banner ("Ponte desligada pelo celular às
+   HH:MM", **Religar a ponte**) or `miblo panic clear` in the person's own terminal (refused under
+   an AI agent) deletes it, audits `panic_cleared` and starts the bridge. No frame turns it back
+   on: with the bridge off nothing on the computer listens to the relay.
+
+What it does not guarantee: a process the hooks never reported to the bridge (an agent not set up
+with Miblo, a session started while the bridge was down, a Windows session of a tool whose pid the
+bridge cannot resolve) is not ended; a process whose name is not an AI tool's is never signalled,
+so a forged pid cannot aim it at another program.
+
+## Threat model (v6; v7 and v8 rows at the end)
 
 Free and Miblo+ are held to the same bar: the phone companion exposes the computer's activity to
 the cloud only as ciphertext, and nothing on the phone or the relay can act on the computer
@@ -1251,6 +1291,7 @@ without the person's own keys, enrollment and (for an allow) biometric.
 | (v7) The server (or a MITM) plays the new phone towards the computer, knowing everything that travels | the computer shows the code and the phone types it into a CPace-style PAKE bound to both public keys and the attempt: nothing relayed reveals the code; one online guess per attempt (10^-6), 3 attempts, then denied; the computer's `conf` in the first grant pins it on the phone | plugin `phone-trust.test.js`, `account-phones.test.js` (shared `plus-v7-vector.json`), relay `test/pake.test.ts`, `test/api.test.ts`, `test/e2e/plugin.test.ts` |
 | (v7) An AI agent turns approvals, replies, history or tasks on, adds a folder or a second phone | the change waits for a confirmation on a phone the computer already has: the code shown on the computer typed there, a proof under that phone's MAC key, the passkey with UV over `cap`; 3 wrong cancel, 6 requests an hour, one at a time; desktop browsers refused | plugin `plus.test.js`, `phone.test.js` |
 | (v7) Account takeover (recovery code or a passkey of the attacker's) | on miblo.ai every use of a recovery code, failed attempts (at most hourly) and every new passkey send the security notice e-mail; a self-hosted server has no e-mail and logs these events (`account_security`) instead; either way a new phone still gets nothing without the code shown on the computer | relay `test/api.test.ts` (the code path) |
+| (v8) A compromised phone app or a stolen unlocked phone uses the panic button to end the person's sessions, or someone turns the bridge back on from afar | a panic needs an enrolled phone's MAC key and its passkey with user verification over a fresh nonce and time, checked like a reply; it can only end sessions and lock, never start anything; turning the bridge back on is only at the computer (desktop app, or `miblo panic clear` refused under an AI agent), never a frame. Residual: a panic is a denial of service by design: whoever passes the phone's biometric can end the sessions | plugin `panic.test.js` (MAC, no UV, other challenge, stale, replay, other phone, the lock in hooks, CLI, status line and bridge start, clear refused under an agent), web `phone-panic.test.ts` (shared vector, hold, flow) |
 
 ## Self-hosted servers
 

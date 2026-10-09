@@ -87,6 +87,8 @@ import { MibloHero, MibloThumb } from "./MibloHero";
 import { LiveMiblo } from "./LiveMiblo";
 import { PhoneApps } from "./PhoneApps";
 import { acceptPetFrame } from "./pet-cache";
+import { PanicButton, PanicOffNotice } from "./PanicButton";
+import { PANIC_ANSWER_MS, loadPanic, panicCleared, panicFlow, panicPayload, panicStrings, parsePanicAck, savePanic, type PanicAck, type PanicState } from "./panic-model";
 import {
   agoText,
   attentionCount,
@@ -253,6 +255,20 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   const updatePlus = useCallback((room: string, fn: (r: PlusRoom) => PlusRoom) => {
     setPlus((all) => ({ ...all, [room]: fn(all[room] ?? emptyPlus()) }));
   }, []);
+  /** Room -> turned off by the panic button (panic-model.ts): kept across reloads, cleared by a newer status. */
+  const [panics, setPanics] = useState<Record<string, PanicState | null>>({});
+  const panicsRef = useRef(panics);
+  useEffect(() => {
+    panicsRef.current = panics;
+  }, [panics]);
+  const setPanic = useCallback((room: string, state: PanicState | null) => {
+    savePanic(room, state);
+    panicsRef.current = { ...panicsRef.current, [room]: state };
+    setPanics((all) => ({ ...all, [room]: state }));
+  }, []);
+  /** The computer's answers to a panic, by nonce (the button waits for its own). */
+  const panicAcks = useRef(new Map<string, PanicAck>());
+  const [panicBusy, setPanicBusy] = useState(false);
   const subRef = useRef<PushSubscription | null>(null);
   /** This device has passkeys (a user-verifying platform authenticator); null while unknown. */
   const [passkeys, setPasskeys] = useState<boolean | null>(null);
@@ -603,12 +619,29 @@ export function PhoneApp({ lang }: { lang: Locale }) {
         updatePlus(p.room, (r) => (r.outcomes[a.id] ? r : { ...r, approvals: [...r.approvals.filter((x) => x.id !== a.id), a].slice(-10) }));
       });
     } else if (ch === "reply") {
+      // The panic button: the computer accepted it (from this phone, another one, or the computer
+      // itself): it shows off from now on; a refusal goes to the button waiting for it.
+      const pack = parsePanicAck(payload);
+      if (pack) {
+        if (pack.nonce) panicAcks.current.set(pack.nonce, pack);
+        if (pack.state !== "refused") {
+          const had = panicsRef.current[p.room];
+          if (!had || had.at > pack.at) setPanic(p.room, { at: had ? Math.min(had.at, pack.at) : pack.at, by: pack.by });
+        }
+        return;
+      }
       const ack = parseReplyAck(payload);
       if (ack) updatePlus(p.room, (r) => ({ ...r, acks: { ...r.acks, [ack.nonce]: ack } }));
       const tack = parseTaskAck(payload);
       if (tack) updatePlus(p.room, (r) => ({ ...r, taskAcks: { ...r.taskAcks, [tack.nonce]: tack } }));
     }
   }, [t, updatePlus, say]);
+
+  // A computer turned off by panic stays shown off across reloads.
+  useEffect(() => {
+    if (!pairings) return;
+    for (const p of pairings) if (panicsRef.current[p.room] === undefined) setPanic(p.room, loadPanic(p.room));
+  }, [pairings, setPanic]);
 
   // One relay connection per paired computer.
   useEffect(() => {
@@ -652,6 +685,11 @@ export function PhoneApp({ lang }: { lang: Locale }) {
           const snap = parseSnapshot(payload, t);
           if (!snap) return;
           setLastAt(p.room, at!);
+          // A status newer than the panic: the bridge was turned back on at the computer.
+          if (panicCleared(panicsRef.current[p.room], at)) {
+            setPanic(p.room, null);
+            say(panicStrings[lang === "en" ? "en" : "pt"].back);
+          }
           setLive((l) => ({ ...l, [p.room]: { link: l[p.room]?.link ?? "open", snap } }));
           const refused = (planRefused.current.get(p.room) ?? 0) > Date.now();
           const caps = refused ? null : plusCaps(payload);
@@ -661,7 +699,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       map.set(p.room, client);
       client.start();
     }
-  }, [pairings, lang, t, onPlusPayload, updatePlus, applyRekey]);
+  }, [pairings, lang, t, onPlusPayload, updatePlus, applyRekey, setPanic, say]);
 
   useEffect(() => {
     const map = clients.current;
@@ -671,7 +709,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
 
   const decide = async (p: StoredPairing, a: ApprovalView, decision: "allow" | "deny"): Promise<boolean> => {
     const client = clients.current.get(p.room);
-    if (!client || !p.phone) return false;
+    if (!client || !p.phone || panicsRef.current[p.room]) return false;
     let wa;
     if (decision === "allow") {
       // The passkey, with the user's biometric or PIN, over this exact request: the computer checks it.
@@ -714,7 +752,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   };
 
   const sendReply = async (p: StoredPairing, session: string, text: string): Promise<"ok" | "empty" | "too_long" | "offline" | "cancelled" | "no_token"> => {
-    if (!p.phone) return "offline";
+    if (!p.phone || panicsRef.current[p.room]) return "offline";
     const rt = plus[p.room]?.histories[session]?.rt ?? null;
     const built = await replyPayload({ phone: p.phone.id, macKey: p.phone.macKey }, p.room, session, rt, text, wallClock());
     if ("error" in built) return built.error;
@@ -756,7 +794,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   };
 
   const sendTask = async (p: StoredPairing, tool: string, folder: string, text: string, auto = false): Promise<TaskSendResult> => {
-    if (!p.phone?.credId) return "offline";
+    if (!p.phone?.credId || panicsRef.current[p.room]) return "offline";
     const info = plus[p.room]?.taskInfo ?? null;
     const built = await taskPayload({ phone: p.phone.id, macKey: p.phone.macKey }, p.room, tool, folder, info?.tt ?? null, text, wallClock(), auto);
     if ("error" in built) return built.error;
@@ -789,6 +827,44 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     return ok;
   };
 
+  // The panic button: held 2 s, then the passkey (biometric or PIN) over the frame, then the
+  // computer's answer. Accepted: this computer shows off (no replies, approvals or tasks) until a
+  // status from it is newer than the panic.
+  const ps = panicStrings[lang === "en" ? "en" : "pt"];
+  const sendPanic = async (p: StoredPairing) => {
+    if (!p.phone?.credId || panicBusy) return;
+    const client = clients.current.get(p.room);
+    if (!client) return say(ps.offline);
+    const phone = p.phone;
+    const credId = phone.credId;
+    setPanicBusy(true);
+    try {
+      const { result, ack } = await panicFlow({
+        build: () => panicPayload({ phone: phone.id, macKey: phone.macKey }, p.room, wallClock()),
+        assert: (challenge) => assertPhonePasskey({ rpId: rpIdFor(location.hostname), credId, challenge }),
+        send: (payload) => client.sendUp("reply", payload),
+        answer: (nonce) =>
+          new Promise<PanicAck | null>((resolve) => {
+            const end = Date.now() + PANIC_ANSWER_MS;
+            const look = () => {
+              const a = panicAcks.current.get(nonce);
+              if (a) return resolve(a);
+              if (Date.now() > end) return resolve(null);
+              window.setTimeout(look, 150);
+            };
+            look();
+          }),
+      });
+      if (result === "ok" && ack) setPanic(p.room, { at: ack.at, by: "phone" });
+      else if (result === "cancelled") say(ps.cancelled);
+      else if (result === "offline") say(ps.offline);
+      else if (result === "no_answer") say(ps.noAnswer);
+      else if (typeof result === "object") say(ps.refused(result.refused));
+    } finally {
+      setPanicBusy(false);
+    }
+  };
+
   const enableAlerts = async () => {
     setNotify("busy");
     try {
@@ -805,7 +881,9 @@ export function PhoneApp({ lang }: { lang: Locale }) {
 
   const current = pairings?.find((p) => p.room === selected) ?? pairings?.[0] ?? null;
   const currentLive = current ? live[current.room] : undefined;
-  const currentOn = !!(current && plus[current.room]?.caps?.on);
+  /** The current computer was turned off by panic: no replies, approvals or tasks for it. */
+  const currentPanic = current ? (panics[current.room] ?? null) : null;
+  const currentOn = !!(current && plus[current.room]?.caps?.on) && !currentPanic;
   const currentOpen = currentLive?.link === "open";
 
   // History on demand: the open conversation asks the computer for that session's last messages
@@ -869,12 +947,12 @@ export function PhoneApp({ lang }: { lang: Locale }) {
   const all = pairings ?? [];
   const waiting = all.flatMap((p) => {
     const room = plus[p.room];
-    if (!room?.caps?.on) return [];
+    if (!room?.caps?.on || panics[p.room]) return [];
     return room.approvals.filter((a) => a.expires + DONE_LINGER_MS > now).map((a) => ({ p, a, room }));
   });
   const pendingOf = (room: string) => {
     const r = plus[room];
-    return r?.caps?.on ? pendingApprovals(r.approvals, r.outcomes, now).length : 0;
+    return r?.caps?.on && !panics[room] ? pendingApprovals(r.approvals, r.outcomes, now).length : 0;
   };
   const pendingTotal = all.reduce((n, p) => n + pendingOf(p.room), 0);
   // Nothing of the sessions while the app is locked (PIN), not even a count in the title or icon.
@@ -920,7 +998,8 @@ export function PhoneApp({ lang }: { lang: Locale }) {
 
   // --- a conversation (Miblo+): its own screen ------------------------------------------------
   const room = current ? plus[current.room] : undefined;
-  const caps = room?.caps ?? null;
+  // Off by panic: the computer is treated as without Miblo+ (nothing to reply, approve or start).
+  const caps = currentPanic ? null : (room?.caps ?? null);
   const sessionOf = (id: string) => currentLive?.snap?.sessions.find((s) => s.id === id);
   if (current && caps?.on && openSession) {
     const s = sessionOf(openSession);
@@ -1083,6 +1162,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
         </div>
       )}
       {trustCards}
+      {currentPanic && <PanicOffNotice s={ps} state={currentPanic} />}
       {(status.tone === "bad" || link === "limit") && (
         <Notice
           tone={status.tone === "bad" ? "bad" : "warn"}
@@ -1204,10 +1284,14 @@ export function PhoneApp({ lang }: { lang: Locale }) {
         )
       )}
 
-      {snap && !caps?.on && (
+      {snap && !caps?.on && !currentPanic && (
         <div className="mt-6">
           <Upsell t={t} />
         </div>
+      )}
+
+      {caps?.on && current.phone?.credId && (
+        <PanicButton s={ps} busy={panicBusy} disabled={!(phoneOnline && link === "open")} onConfirm={() => void sendPanic(current)} />
       )}
     </>
   );

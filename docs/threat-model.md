@@ -127,6 +127,11 @@ Same as a malicious miblo.ai, against the same defenses:
   being enough.
 - Switching servers unlinks the computer and turns the phone companion off at the old server first,
   so no room keys or tokens of the old server are reused with the new one.
+- The panic button (protocol.md, "v8: the panic button") is turned back on only at the computer:
+  the desktop app or `miblo panic clear`, which is refused from an AI agent. No frame through this
+  server can turn the bridge back on, and a panic frame needs the phone's passkey with user
+  verification, so an operator can at most withhold it (the person then uses `miblo panic` or the
+  desktop app at the computer).
 
 ### 5. Physical or backup theft of the server's data
 
