@@ -1259,6 +1259,62 @@ with Miblo, a session started while the bridge was down, a Windows session of a 
 bridge cannot resolve) is not ended; a process whose name is not an AI tool's is never signalled,
 so a forged pid cannot aim it at another program.
 
+## Webhooks (Miblo+, 2026-10-09)
+
+On this server (self-hosted): the room part below (`/__hook`, `/__hook_ask`, `/__hooks`, the
+writer's `hook_ack`/`hook_answer`, the queue and the room's life) is ported byte for byte and
+tested on both runtimes; on Node an inspector question waits its turn at the room's gate and then
+runs beside it, so the writer's answer can arrive. The `/h/<id>` endpoint and the account's hook
+API are not built here yet: a computer pointed at this server says webhooks need miblo.ai for now.
+On Node a stored value is capped at 128 KB, so the largest deliveries (a 64 KB body with every
+forwarded header at its 1 KB cap) would not fit; that matters once `/h/` exists here.
+
+Personal webhooks that become alerts on the Miblo (claude_gadget docs/screen-sdk-architecture.md
+"Webhooks" is the whole design; this is the relay's part). The room never opens anything here.
+
+- **Receive** (`web/src/server/hooks/receive.ts`, before OpenNext): `POST|PUT /h/<hookId>` (32
+  base64url). Order: 405 → per-IP limit (`HOOK_IP_LIMITER`) → `Content-Length` and the streamed body
+  ≤ 64 KB (413) → content type JSON (also `+json`), form, `text/*` or none (415) → the hook by
+  base64url(SHA-256(hookId)) on a linked computer (404) → per hook and per account limits
+  (`HOOK_LIMITER`, `HOOK_ACCOUNT_LIMITER`, 429 `Retry-After: 60`) → Miblo+ (402
+  `plus_required`, nothing forwarded) → the computer's key and newest room (503
+  `computer_not_ready`) → sealed → room → 202 `{"ok":true,"id":"<d>"}`. D1 gets counts, the last
+  time and status (`sent`, `queued`, `plus_required`, `rate_limited`, `computer_not_ready`).
+- **Envelope** (`web/src/lib/hooks/envelope.ts`, vector `tests/fixtures/hooks-vector.json`,
+  identical in the plugin): label `"<prefix>|<room>|<id>"`; ECDH P-256 with an ephemeral key;
+  HKDF-SHA256(salt = the ephemeral point raw, info = label) → AES-256-GCM, AAD = label; `{epk, iv,
+  ct}` base64url. Delivery: prefix `miblo-hook-v1`, id `d`, sealed to the computer's key, plaintext
+  `{v:1, hook, d, at, ct, h, b, n}` (`b` the body bytes base64url). Answer: prefix
+  `miblo-hook-answer-v1`, id `q`, sealed by the computer to the page's key.
+- **Room, internal calls** (binding only; the router forwards 22-character room paths only):
+  - `POST /__hook {d, e}` → 202 `{queued, sent}`; 402 on a free room; 400 malformed (`d` 22
+    base64url, `e.ct` ≤ 160 KiB). Kept as `hk:<room time>:<d>`, at most 50 (the oldest go), 24 h
+    (the alarm drops older ones), and sent to the authenticated writer as
+    `{"t":"hook","d","at","e"}` now and to every writer that authenticates later, oldest first.
+  - `POST /__hook_ask {q, hook, op, d?, epk}` (`op`: list, get, test, replay; `hook` = `h` + 9 of
+    `[a-z0-9]`) → the writer gets `{"t":"hook_ask","q","hook","op","d"?,"epk"}`; the room waits up
+    to 8 s for `{"t":"hook_answer","q","e"}` (`e.ct` ≤ 60 KiB) and answers `{e}`; 503
+    `{"error":"bridge_offline"}` without a writer, 504 `no_answer`, 429 `busy` past 4 questions in
+    flight, 402 on a free room. Never stored.
+  - `POST /__hooks` → the writer gets `{"t":"hooks_changed"}` (fixed, nothing in it) and reads the
+    account's hooks itself; `{writers: n}`.
+- **Writer frames:** `{"t":"hook_ack","d":[ids]}` (≤ 50; the room deletes them) and
+  `{"t":"hook_answer","q","e"}`, up to 10 a second on their own budget (not the 2 frames a second
+  of the other writer frames).
+- **Room life:** a Miblo+ room no phone ever joined is no longer deleted 24 h after it was made: it
+  lives like a joined room (30 days without its computer), since a computer may use it for
+  webhooks alone.
+- **Account API:** linked computer (Bearer): `PUT /api/plus/hooks/key {pub}` (204), `GET|POST
+  /api/plus/hooks`, `PATCH|DELETE /api/plus/hooks/<hid>`, `POST /api/plus/hooks/<hid>/rotate`. The
+  account page (session, second factor, CSRF, Miblo+): `GET|POST /api/account/hooks`, `POST
+  /api/account/hooks/<hid>` (rename), `…/rotate`, `…/delete`, `…/ask {epk, op, d?}` → `{e, room,
+  q}`. Every change from the page tells the computer's room (`/__hooks`).
+- **Threat notes:** the worker sees each payload in transit (TLS ends there) and seals it before
+  anything else; the inspector is not end-to-end against miblo.ai (the server serves the page that
+  makes the key), but it shows only what already crossed the worker; a malicious server could ask
+  the computer for its delivery history or make it replay one through the person's mapping
+  (alerts only: a mapping cannot act on the computer).
+
 ## Threat model (v6; v7 and v8 rows at the end)
 
 Free and Miblo+ are held to the same bar: the phone companion exposes the computer's activity to

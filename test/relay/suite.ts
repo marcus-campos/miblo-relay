@@ -151,6 +151,90 @@ describe("relay router", () => {
   });
 });
 
+describe("relay room: webhooks", () => {
+  const call = (room: string, what: string, body: unknown) => h.dispatchFetch(`http://localhost/__test/${room}/${what}`, { method: "POST", body: JSON.stringify(body) });
+  const env = () => ({ epk: "B" + rand(64).slice(0, 86), iv: rand(12), ct: rand(200) });
+  const delivery = () => ({ d: rand(16), e: env() });
+  const hookKeys = async (room: string) => Object.keys((await storage(room)).entries).filter((k) => k.startsWith("hk:"));
+  const hooks = (c: Client) => c.messages.filter((m) => m.t === "hook");
+
+  it("a free room takes no delivery and no question (402)", async () => {
+    const p = pairing();
+    await openWriter(p);
+    expect((await call(p.room, "hook", delivery())).status).toBe(402);
+    expect((await call(p.room, "hookask", { q: rand(16), hook: "habc123def", op: "list", epk: env().epk })).status).toBe(402);
+  });
+
+  it("a delivery waits for the writer, goes to it when it connects, and leaves on its ack", async () => {
+    const p = pairing();
+    const first = await openWriter(p);
+    await testCall(p.room, "plan", "?set=plus");
+    first.ws.close();
+    await settle(80);
+    const one = delivery();
+    const res = await call(p.room, "hook", one);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ queued: 1, sent: false });
+    const w = await openWriter(p);
+    await until(() => hooks(w).length === 1);
+    expect(hooks(w)[0]).toMatchObject({ t: "hook", d: one.d, e: one.e });
+    const two = delivery();
+    expect(await (await call(p.room, "hook", two)).json()).toEqual({ queued: 2, sent: true });
+    await until(() => hooks(w).length === 2);
+    w.send({ t: "hook_ack", d: [one.d, two.d] });
+    await settle(120);
+    expect(await hookKeys(p.room)).toHaveLength(0);
+  });
+
+  it("keeps at most 50 and drops them after 24 h", async () => {
+    const p = pairing();
+    await openWriter(p);
+    await testCall(p.room, "plan", "?set=plus");
+    const ids: string[] = [];
+    for (let i = 0; i < 52; i++) {
+      const x = delivery();
+      ids.push(x.d);
+      await call(p.room, "hook", x);
+    }
+    const keys = await hookKeys(p.room);
+    expect(keys).toHaveLength(50);
+    expect(keys.some((k) => k.endsWith(ids[0]))).toBe(false);
+    await advance(p.room, DAY + 1000);
+    await testCall(p.room, "alarm");
+    expect(await hookKeys(p.room)).toHaveLength(0);
+  });
+
+  it("a question reaches the writer and its sealed answer comes back; no writer: 503", async () => {
+    const p = pairing();
+    const first = await openWriter(p);
+    await testCall(p.room, "plan", "?set=plus");
+    first.ws.close();
+    await settle(80);
+    const ask = () => ({ q: rand(16), hook: "habc123def", op: "list", epk: env().epk });
+    expect((await call(p.room, "hookask", ask())).status).toBe(503);
+    const w = await openWriter(p);
+    const q = ask();
+    const pending = call(p.room, "hookask", q);
+    await until(() => w.messages.some((m) => m.t === "hook_ask"));
+    expect(w.messages.find((m) => m.t === "hook_ask")).toEqual({ t: "hook_ask", ...q });
+    const e = env();
+    w.send({ t: "hook_answer", q: q.q, e });
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ e });
+  });
+
+  it("'hooks changed' reaches the writer; the internal paths are not public", async () => {
+    const p = pairing();
+    const w = await openWriter(p);
+    expect(await (await call(p.room, "hooks", {})).json()).toEqual({ writers: 1 });
+    await until(() => w.messages.some((m) => m.t === "hooks_changed"));
+    for (const path of ["__hook", "__hook_ask", "__hooks"]) {
+      expect((await h.dispatchFetch(`http://localhost/api/relay/${path}`, { method: "POST", body: "{}" })).status).toBe(404);
+    }
+  });
+});
+
 describe("relay room: phones changed (v6 push)", () => {
   const hint = (room: string, method = "POST") => h.dispatchFetch(`http://localhost/__test/${room}/phones`, { method });
   it("the account side's call reaches the authenticated writer only, as a fixed frame with nothing in it, and stores nothing", async () => {
