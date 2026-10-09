@@ -2301,6 +2301,8 @@ div.toolCard {
   margin-top: 0.5rem;
   font-size: 0.9rem;
   color: var(--ink-2);
+}
+
 /* The push notifications switch (settings). */
 .switchRow {
   display: flex;
