@@ -1284,11 +1284,12 @@ Personal webhooks that become alerts on the Miblo (claude_gadget docs/screen-sdk
   identical in the plugin): label `"<prefix>|<room>|<id>"`; ECDH P-256 with an ephemeral key;
   HKDF-SHA256(salt = the ephemeral point raw, info = label) → AES-256-GCM, AAD = label; `{epk, iv,
   ct}` base64url. Delivery: prefix `miblo-hook-v1`, id `d`, sealed to the computer's key, plaintext
-  `{v:1, hook, d, at, ct, h, b, n}` (`b` the body bytes base64url). Answer: prefix
+  `{v:1, hook, d, at, ct, h, t | b, n}` (`t` the body as UTF-8 text when it is valid UTF-8, byte
+  for byte; otherwise `b`, the bytes base64url; `h` at most 2 KB in all). Answer: prefix
   `miblo-hook-answer-v1`, id `q`, sealed by the computer to the page's key.
 - **Room, internal calls** (binding only; the router forwards 22-character room paths only):
   - `POST /__hook {d, e}` → 202 `{queued, sent}`; 402 on a free room; 400 malformed (`d` 22
-    base64url, `e.ct` ≤ 160 KiB). Kept as `hk:<room time>:<d>`, at most 50 (the oldest go), 24 h
+    base64url, `e.ct` ≤ 120 KiB, so an item stays under the Node relay's 128 KiB per stored value). Kept as `hk:<room time>:<d>`, at most 50 (the oldest go), 24 h
     (the alarm drops older ones), and sent to the authenticated writer as
     `{"t":"hook","d","at","e"}` now and to every writer that authenticates later, oldest first.
   - `POST /__hook_ask {q, hook, op, d?, epk}` (`op`: list, get, test, replay; `hook` = `h` + 9 of

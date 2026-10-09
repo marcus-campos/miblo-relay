@@ -186,6 +186,16 @@ describe("relay room: webhooks", () => {
     expect(await hookKeys(p.room)).toHaveLength(0);
   });
 
+  it("the largest delivery fits the Node store's 128 KiB per item; a larger one is refused", async () => {
+    const p = pairing();
+    await openWriter(p);
+    await testCall(p.room, "plan", "?set=plus");
+    const big = { d: rand(16), e: { ...env(), ct: "A".repeat(120 * 1024) } };
+    expect((await call(p.room, "hook", big)).status).toBe(202);
+    expect(await hookKeys(p.room)).toHaveLength(1);
+    expect((await call(p.room, "hook", { d: rand(16), e: { ...env(), ct: "A".repeat(120 * 1024 + 1) } })).status).toBe(400);
+  });
+
   it("keeps at most 50 and drops them after 24 h", async () => {
     const p = pairing();
     await openWriter(p);

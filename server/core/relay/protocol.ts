@@ -395,8 +395,11 @@ export const HOOKS = {
   queueMax: 50,
   /** ...and for how long. */
   ttlMs: 24 * 60 * 60 * 1000,
-  /** A sealed delivery's ct (base64url characters): a 64 KB body, its headers, base64url twice over. */
-  deliveryCtMax: 160 * 1024,
+  /**
+   * A sealed delivery's ct (base64url characters): a 64 KB body (as text, or base64url when it is
+   * not UTF-8) and 2 KB of headers, base64url once more. Under the Node relay's 128 KiB per stored item.
+   */
+  deliveryCtMax: 120 * 1024,
   /** A sealed answer to the inspector (it travels in one writer frame). */
   answerCtMax: 60 * 1024,
   /** Inspector questions waiting for the computer at once, and how long each waits. */
