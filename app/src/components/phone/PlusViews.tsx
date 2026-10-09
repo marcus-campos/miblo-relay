@@ -57,6 +57,11 @@ function Shown({ v }: { v: Visible }) {
  */
 export type ActBlock = null | "noPasskeys" | "notEnrolled" | "revoked";
 
+/** The computer's deadline as a time of day on this phone ("23:45"). */
+function clockTime(ms: number, lang: "pt" | "en"): string {
+  return new Date(ms).toLocaleTimeString(lang === "pt" ? "pt-BR" : "en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
 export function ApprovalCard({
   t,
   a,
@@ -131,6 +136,11 @@ export function ApprovalCard({
           </p>
         </div>
       </div>
+      {!expired && !outcome && (
+        <p className={styles.approvalWait} data-testid="approval-wait" data-urgent={clock.urgent ? "true" : undefined}>
+          {t.plus.approvalWaits(left, clockTime(a.expires, t.lang))}
+        </p>
+      )}
       {expired && !outcome && <p className={styles.warn}>{t.plus.approvalExpired}</p>}
       {outcome ? null : view ? (
         <>

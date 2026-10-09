@@ -40,6 +40,16 @@ export function ringText(left: number): string {
   return `${Math.ceil(left / 3600)}h`;
 }
 
+/**
+ * A request (re)received from the computer: one card per id (a request sent again after the phone
+ * came back replaces its card, never doubles it), an answered one is not brought back, the 10
+ * newest are kept.
+ */
+export function mergeApproval(list: readonly ApprovalView[], a: ApprovalView, outcomes: Readonly<Record<string, string>>): ApprovalView[] {
+  if (outcomes[a.id]) return [...list];
+  return [...list.filter((x) => x.id !== a.id), a].slice(-10);
+}
+
 /** Approvals still waiting for an answer (not expired, none given). */
 export function pendingApprovals(approvals: readonly ApprovalView[], outcomes: Readonly<Record<string, string>>, now: number): ApprovalView[] {
   return approvals.filter((a) => a.expires > now && !outcomes[a.id]);

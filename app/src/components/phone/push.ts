@@ -81,3 +81,29 @@ export async function unsubscribeAll(lang: "pt" | "en"): Promise<void> {
 export function subFrame(sub: PushSubscription, lang: "pt" | "en") {
   return { t: "sub", sub: sub.toJSON(), lang: lang === "pt" ? "pt-BR" : "en" };
 }
+
+/**
+ * Push turned off in the settings: each room drops this endpoint's subscription and every one this
+ * phone made there ({"t":"unsub"}); only the endpoint goes, never its keys.
+ */
+export function unsubFrame(sub: Pick<PushSubscription, "endpoint"> | null) {
+  return sub ? { t: "unsub", sub: { endpoint: sub.endpoint } } : { t: "unsub" };
+}
+
+/** What a notification is about (the relay's fixed kinds). */
+export const PUSH_OPEN = ["approval", "needs_you", "task_done", "task_failed"] as const;
+export type PushOpen = (typeof PUSH_OPEN)[number];
+
+/**
+ * The page a notification opens (sw.js builds the same): the app's own page with what it is about
+ * (`?open=approval`), which shows the "Agora" tab; anything else opens the app as it is.
+ */
+export function pushTarget(scope: string, kind: unknown): string {
+  return (PUSH_OPEN as readonly unknown[]).includes(kind) ? `${scope}?open=${kind}` : scope;
+}
+
+/** The `open` a notification's page was opened with, or null (an unknown value is ignored). */
+export function openedFor(search: string): PushOpen | null {
+  const v = new URLSearchParams(search).get("open");
+  return (PUSH_OPEN as readonly (string | null)[]).includes(v) ? (v as PushOpen) : null;
+}

@@ -24,6 +24,7 @@ import {
   CLOSE,
   LIMITS,
   bearerToken,
+  canonicalEndpoint,
   deriveRoom,
   CT_MAX,
   UP_PER_MINUTE,
@@ -38,12 +39,14 @@ import {
   isRole,
   isRoom,
   isToken,
-  needsYouNotification,
+  isPushEventKind,
+  pushNotification,
   parseSubscription,
   pushLang,
   sameString,
   sha256B64url,
   type Plan,
+  type PushKind,
   type PushLang,
   type PushSubscriptionJson,
   type Role,
@@ -109,7 +112,17 @@ export interface RoomRuntime {
  * `phone`: the enrolled phone a reader authenticated as (absent: a guest, or the writer).
  * `ck`: the client's networks as the router passed them ("<tier>:<keyed hash>,..."; new rooms only).
  */
-type Attachment = { role: Role; authed: boolean; openedAt: number; room: string; phone?: string; ph?: string; ck?: string };
+type Attachment = {
+  role: Role;
+  authed: boolean;
+  openedAt: number;
+  room: string;
+  phone?: string;
+  ph?: string;
+  ck?: string;
+  /** When this phone last said its app is on the screen ({"t":"fg","on":true}); 0 or absent: not. */
+  fg?: number;
+};
 type Meta = {
   /** base64url(SHA-256(readToken)), registered by the writer. */
   readHash?: string;
@@ -122,6 +135,8 @@ type Meta = {
   pushAt?: number;
   pushDay?: number;
   pushCount?: number;
+  /** When each Miblo+ push event kind last went out ({"t":"push","k"}): one a minute per kind. */
+  pushKindAt?: Partial<Record<PushKind, number>>;
   plan?: Plan;
   /** Miblo+: when the "plus" plan lapses on its own (ms), even if the account side never calls. */
   planUntil?: number;
@@ -135,7 +150,8 @@ type Meta = {
   nets?: string[];
 };
 type StoredFrame = { iv: string; ct: string; at: number };
-type StoredSub = { sub: PushSubscriptionJson; lang: PushLang; at: number };
+/** `phone`: the enrolled phone that subscribed (absent for a guest): dropped when it is revoked. */
+type StoredSub = { sub: PushSubscriptionJson; lang: PushLang; at: number; phone?: string };
 
 const OPEN = 1;
 const HOUR = 60 * 60 * 1000;
@@ -306,14 +322,20 @@ export class RelayRoom {
 
     if (att.role === "writer") {
       if (data.t === "msg") return this.relayFrame(data, ws);
-      if (data.t === "push") return this.push(data.n);
+      if (data.t === "push") return this.push(data.n, data.k);
       if (data.t === "phones") {
         const phones = parsePhones(data.list);
         if (phones) await this.updatePhones(phones);
         return;
       }
     } else if (data.t === "sub") {
-      return this.subscribe(data.sub, data.lang);
+      return this.subscribe(data.sub, data.lang, att.phone);
+    } else if (data.t === "unsub") {
+      return this.unsubscribe(data.sub, att.phone);
+    } else if (data.t === "fg") {
+      // The app on the phone's screen or not: kept on the socket only (never stored).
+      ws.serializeAttachment({ ...att, fg: data.on === true ? this.now() : 0 } satisfies Attachment);
+      return;
     } else if (data.t === "up") {
       return this.relayUp(ws, data);
     }
@@ -453,6 +475,16 @@ export class RelayRoom {
     this.closeUnlisted();
     await this.ctx.storage.put("meta", this.meta);
     this.presence();
+    await this.dropUnlistedSubs();
+  }
+
+  /** A revoked phone's push subscriptions go with it (a guest's stay until they are stale or gone). */
+  private async dropUnlistedSubs(): Promise<void> {
+    const listed = this.meta.phones;
+    if (!listed) return;
+    const all = await this.ctx.storage.list<StoredSub>({ prefix: "sub:" });
+    const gone = [...all].filter(([, v]) => v.phone && !listed[v.phone]).map(([k]) => k);
+    if (gone.length) await this.ctx.storage.delete(gone);
   }
 
   /** A phone the writer no longer lists (revoked), or whose token changed, is closed at once. */
@@ -761,20 +793,53 @@ export class RelayRoom {
     if (at !== null) await this.scheduleAlarm(Math.max(at, this.now() + 1));
   }
 
-  private async push(n: unknown): Promise<void> {
+  private async push(n: unknown, k?: unknown): Promise<void> {
+    if (k !== undefined) return isPushEventKind(k) ? this.pushEvent(k) : undefined;
     if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 10_000) return;
     const now = this.now();
     const previous = this.meta.pushN ?? 0;
     const day = utcDay(now);
     const usedToday = this.meta.pushDay === day ? (this.meta.pushCount ?? 0) : 0;
-    const due =
+    let due =
       n > previous &&
       usedToday < LIMITS.pushesPerRoomPerDay &&
       (this.meta.pushAt === undefined || now - this.meta.pushAt >= LIMITS.pushIntervalMs);
     this.meta.pushN = n;
+    // Only the phones not looking at the app: when every one is, nothing goes and nothing is spent.
+    const targets = due ? await this.pushTargets(now) : [];
+    if (!targets.length) due = false;
     if (due) Object.assign(this.meta, { pushAt: now, pushDay: day, pushCount: usedToday + 1 });
     if (n !== previous || due) await this.ctx.storage.put("meta", this.meta);
-    if (due) await this.sendPushes();
+    if (due) await this.deliver("needs_you", targets);
+  }
+
+  /**
+   * A Miblo+ event the writer names by its fixed kind (a permission request, a phone task's end):
+   * at most one a minute per kind, within the room's daily count. An approval also counts as the
+   * "needs you" of that moment (the session waits for the same thing): no second alert right after.
+   */
+  private async pushEvent(kind: PushKind): Promise<void> {
+    const now = this.now();
+    const day = utcDay(now);
+    const usedToday = this.meta.pushDay === day ? (this.meta.pushCount ?? 0) : 0;
+    const last = this.meta.pushKindAt?.[kind];
+    if (usedToday >= LIMITS.pushesPerRoomPerDay || (last !== undefined && now - last < LIMITS.pushIntervalMs)) return;
+    const targets = await this.pushTargets(now);
+    if (!targets.length) return;
+    this.meta.pushKindAt = { ...(this.meta.pushKindAt ?? {}), [kind]: now };
+    Object.assign(this.meta, { pushDay: day, pushCount: usedToday + 1 }, kind === "approval" ? { pushAt: now } : {});
+    await this.ctx.storage.put("meta", this.meta);
+    await this.deliver(kind, targets);
+  }
+
+  /** The enrolled phones whose app is on the screen now (they said so within foregroundFreshMs). */
+  private foregroundPhones(now: number): Set<string> {
+    const on = new Set<string>();
+    for (const r of this.sockets("reader")) {
+      const att = this.attachment(r);
+      if (att?.authed && att.phone && att.fg && now - att.fg < LIMITS.foregroundFreshMs) on.add(att.phone);
+    }
+    return on;
   }
 
   private vapid(): VapidKeys | null {
@@ -980,15 +1045,26 @@ export class RelayRoom {
     console.warn(JSON.stringify({ event: "relay_push_budget", pool, level, cap, day: b.day }));
   }
 
-  private async sendPushes(): Promise<void> {
-    const keys = this.vapid();
-    // Only a room a phone has really joined, and only subscriptions a phone re-sent recently.
-    if (!keys || !this.meta.readerEver) return;
-    const now = this.now();
+  /**
+   * The subscriptions a push may go to now: only in a room a phone has really joined, only ones a
+   * phone re-sent recently (older ones are dropped, and so are a revoked phone's), and never a phone
+   * whose app is on its screen right now.
+   */
+  private async pushTargets(now: number): Promise<[string, StoredSub][]> {
+    if (!this.vapid() || !this.meta.readerEver) return [];
     const all = [...(await this.ctx.storage.list<StoredSub>({ prefix: "sub:" }))];
-    const stale = all.filter(([, v]) => now - v.at > LIMITS.subscriptionFreshMs).map(([k]) => k);
-    if (stale.length) await this.ctx.storage.delete(stale);
-    const subs = all.filter(([, v]) => now - v.at <= LIMITS.subscriptionFreshMs);
+    const listed = this.meta.phones;
+    const drop = all
+      .filter(([, v]) => now - v.at > LIMITS.subscriptionFreshMs || (v.phone && listed && !listed[v.phone]))
+      .map(([k]) => k);
+    if (drop.length) await this.ctx.storage.delete(drop);
+    const looking = this.foregroundPhones(now);
+    return all.filter(([k, v]) => !drop.includes(k) && !(v.phone && looking.has(v.phone)));
+  }
+
+  private async deliver(kind: PushKind, subs: [string, StoredSub][]): Promise<void> {
+    const keys = this.vapid();
+    if (!keys || !subs.length) return;
     const pool = this.plan();
     // Who pays: the Miblo+ account; for a free room each tier of the network that created it, with
     // the room's own small fallback.
@@ -1001,12 +1077,14 @@ export class RelayRoom {
     if (!going.length) return;
     const subject = this.env.RELAY_VAPID_SUBJECT || this.env.PUBLIC_ORIGIN || "";
     if (!subject) return;
+    // A newer undelivered alert of the same topic replaces an older one at the push service.
+    const topic = kind === "task_done" || kind === "task_failed" ? "task" : "needs-you";
     const failed = { p: 0, f: 0 };
     await Promise.all(
       going.map(async ([key, stored]) => {
         const path = allowed.get(key.slice(4)) ?? "p";
         try {
-          const res = await sendPush(stored.sub, needsYouNotification(stored.lang), keys, { subject, ttl: 3600, topic: "needs-you" });
+          const res = await sendPush(stored.sub, pushNotification(kind, stored.lang), keys, { subject, ttl: 3600, topic });
           if (res.gone) await this.ctx.storage.delete(key);
           if (res.status < 200 || res.status >= 300) failed[path] += 1;
         } catch {
@@ -1019,20 +1097,35 @@ export class RelayRoom {
     await this.refundBudget(pool, payers, fb, failed.p, failed.f);
   }
 
-  private async subscribe(raw: unknown, lang: unknown): Promise<void> {
+  private async subscribe(raw: unknown, lang: unknown, phone?: string): Promise<void> {
     const sub = parseSubscription(raw);
     // The key must be a real P-256 point (made-up subscriptions are refused here, not at send time).
     if (!sub || !(await validPushKey(sub.keys.p256dh))) return;
     // Keyed by what identifies the subscription (Windows: its token), so spellings cannot multiply it.
     const key = `sub:${(await sha256Hex(endpointIdentity(sub.endpoint))).slice(0, 32)}`;
     const isNew = (await this.ctx.storage.get(key)) === undefined;
-    await this.ctx.storage.put(key, { sub, lang: pushLang(lang), at: this.now() } satisfies StoredSub);
+    await this.ctx.storage.put(key, { sub, lang: pushLang(lang), at: this.now(), ...(phone ? { phone } : {}) } satisfies StoredSub);
     if (!isNew) return;
     const all = [...(await this.ctx.storage.list<StoredSub>({ prefix: "sub:" }))].sort((a, b) => a[1].at - b[1].at);
     // About one per phone the plan allows: the newest stay.
     const cap = this.plan() === "plus" ? LIMITS.maxSubscriptions : LIMITS.maxSubscriptionsFree;
     const extra = all.length - cap;
     if (extra > 0) await this.ctx.storage.delete(all.slice(0, extra).map(([k]) => k));
+  }
+
+  /**
+   * Push turned off on a phone ({"t":"unsub"}, optionally with its subscription): that endpoint's
+   * subscription goes, and every one this phone made in the room.
+   */
+  private async unsubscribe(raw: unknown, phone?: string): Promise<void> {
+    const gone = new Set<string>();
+    const given = (raw as { endpoint?: unknown } | null)?.endpoint;
+    const endpoint = typeof given === "string" ? canonicalEndpoint(given) : null;
+    if (endpoint) gone.add(`sub:${(await sha256Hex(endpointIdentity(endpoint))).slice(0, 32)}`);
+    if (phone) {
+      for (const [k, v] of await this.ctx.storage.list<StoredSub>({ prefix: "sub:" })) if (v.phone === phone) gone.add(k);
+    }
+    if (gone.size) await this.ctx.storage.delete([...gone]);
   }
 
   /** 204 with the room's write token (idempotent), 401 otherwise: existence is never revealed. */

@@ -546,7 +546,7 @@ describe("relay room: push", () => {
     expect(got.headers.authorization).toContain(`k=${h.vapidPublic}`);
     expect(Number(got.headers.ttl)).toBeGreaterThan(0);
     const payload = JSON.parse(new TextDecoder().decode(await decryptPush(got.body, ua)));
-    expect(payload).toEqual({ t: "needs_you", title: "Miblo", body: "Uma sessão precisa de você", lang: "pt-BR" });
+    expect(payload).toEqual({ t: "needs_you", title: "Miblo", body: "A sessão precisa de você", lang: "pt-BR" });
 
     writer.send({ t: "push", n: 2 }); // rises, but within the minute
     await settle(600);
@@ -621,6 +621,128 @@ describe("relay room: push", () => {
     writer.send({ t: "push", n: 1 });
     await settle(800);
     expect(Object.keys((await storage(p.room)).entries).some((k) => k.startsWith("sub:"))).toBe(false);
+  });
+});
+
+describe("relay room: push kinds, the phone on screen, revoke (approvals on the phone)", () => {
+  const subscribed = async (client: Client, lang: "pt-BR" | "en" = "pt-BR") => {
+    const ua = await subscriber();
+    const endpoint = `https://fcm.googleapis.com/fcm/send/${rand(12)}`;
+    client.send({ t: "sub", sub: { endpoint, keys: ua.keys }, lang });
+    await settle();
+    return { ua, endpoint, got: () => h.pushed.filter((x) => x.url === endpoint) };
+  };
+  const payloadOf = async (x: (typeof h.pushed)[number], ua: Awaited<ReturnType<typeof subscriber>>) => JSON.parse(new TextDecoder().decode(await decryptPush(x.body, ua)));
+
+  it("an approval or a task's end is a fixed kind: fixed words, nothing else in the payload; unknown kinds and free text are ignored", async () => {
+    const ph = enrolled();
+    const { p, writer } = await plusWith(ph);
+    const phone = await openPhone(p, ph);
+    const pt = await subscribed(phone, "pt-BR");
+    writer.send({ t: "push", k: "approval" });
+    await until(() => pt.got().length === 1, 10_000);
+    expect(await payloadOf(pt.got()[0], pt.ua)).toEqual({ t: "approval", title: "Miblo", body: "Pedido de permissão", lang: "pt-BR" });
+    expect(pt.got()[0].headers.topic).toBe("needs-you");
+    writer.send({ t: "push", k: "task_done" });
+    await until(() => pt.got().length === 2, 10_000);
+    expect(await payloadOf(pt.got()[1], pt.ua)).toEqual({ t: "task_done", title: "Miblo", body: "Tarefa concluída", lang: "pt-BR" });
+    expect(pt.got()[1].headers.topic).toBe("task");
+    // (The room's clock is the test's: a new second for the writer's 2 frames a second.)
+    await advance(p.room, 1100);
+    writer.send({ t: "push", k: "task_failed" });
+    await until(() => pt.got().length === 3, 10_000);
+    expect(await payloadOf(pt.got()[2], pt.ua)).toEqual({ t: "task_failed", title: "Miblo", body: "A tarefa falhou", lang: "pt-BR" });
+    // Unknown kinds, free text in the kind, or anything else the writer adds: nothing goes.
+    await advance(p.room, 61_000);
+    writer.send({ t: "push", k: "rm -rf / was asked" });
+    writer.send({ t: "push", k: { body: "secret" } });
+    await settle(600);
+    expect(pt.got()).toHaveLength(3);
+    // English phone: the English words.
+    const ph2 = enrolled();
+    const room2 = await plusWith(ph2);
+    const en = await subscribed(await openPhone(room2.p, ph2), "en");
+    room2.writer.send({ t: "push", k: "approval", body: "Run npm publish?" });
+    await until(() => en.got().length === 1, 10_000);
+    const payload = await payloadOf(en.got()[0], en.ua);
+    expect(payload).toEqual({ t: "approval", title: "Miblo", body: "Permission request", lang: "en" });
+    expect(JSON.stringify(payload)).not.toContain("npm");
+  });
+
+  it("one alert a minute per kind; an approval is that moment's 'needs you' (no second alert right after it)", async () => {
+    const ph = enrolled();
+    const { p, writer } = await plusWith(ph);
+    const s = await subscribed(await openPhone(p, ph));
+    writer.send({ t: "push", k: "approval" });
+    await until(() => s.got().length === 1, 10_000);
+    writer.send({ t: "push", k: "approval" });
+    await advance(p.room, 1100); // a new second for the writer's 2 frames a second
+    writer.send({ t: "push", n: 1 });
+    await settle(700);
+    expect(s.got()).toHaveLength(1);
+    // Another kind is its own alert.
+    await advance(p.room, 1100);
+    writer.send({ t: "push", k: "task_done" });
+    await until(() => s.got().length === 2, 10_000);
+    await advance(p.room, 61_000);
+    writer.send({ t: "push", k: "approval" });
+    await until(() => s.got().length === 3, 10_000);
+  });
+
+  it("a phone whose app is on its screen gets no alert (it sees the card); hidden again, or silent for 150 s, it does", async () => {
+    const a = enrolled();
+    const b = enrolled();
+    const { p, writer } = await plusWith(a, b);
+    const pa = await openPhone(p, a);
+    const pb = await openPhone(p, b);
+    const sa = await subscribed(pa);
+    const sb = await subscribed(pb);
+    pa.send({ t: "fg", on: true });
+    await settle();
+    writer.send({ t: "push", k: "approval" });
+    await until(() => sb.got().length === 1, 10_000);
+    await settle(400);
+    expect(sa.got()).toHaveLength(0);
+    // Both on screen: nothing goes, and nothing is spent (the next one still may go).
+    pb.send({ t: "fg", on: true });
+    await settle();
+    await advance(p.room, 61_000);
+    writer.send({ t: "push", k: "task_done" });
+    await settle(600);
+    expect(sa.got().length + sb.got().length).toBe(1);
+    // A hidden; B's "on screen" goes stale after 150 s without being said again.
+    pa.send({ t: "fg", on: false });
+    await settle();
+    writer.send({ t: "push", k: "task_done" });
+    await until(() => sa.got().length === 1, 10_000);
+    expect(sb.got()).toHaveLength(1);
+    await advance(p.room, LIMITS.foregroundFreshMs + 1000);
+    writer.send({ t: "push", k: "task_failed" });
+    await until(() => sb.got().length === 2, 10_000);
+  });
+
+  it("a revoked phone's subscription goes with it; a phone turning push off removes its own", async () => {
+    const a = enrolled();
+    const b = enrolled();
+    const { p, writer } = await plusWith(a, b);
+    const pa = await openPhone(p, a);
+    const pb = await openPhone(p, b);
+    const sa = await subscribed(pa);
+    const sb = await subscribed(pb);
+    const subs = async () => Object.entries((await storage(p.room)).entries).filter(([k]) => k.startsWith("sub:")).map(([, v]) => v as { phone?: string });
+    expect((await subs()).map((x) => x.phone).sort()).toEqual([a.id, b.id].sort());
+    // The computer revokes B: B is closed, and its subscription is deleted.
+    writer.send({ t: "phones", list: [{ id: a.id, h: sha(a.token) }] });
+    await until(() => pb.close?.code === 4411, 10_000);
+    await settle(300);
+    expect((await subs()).map((x) => x.phone)).toEqual([a.id]);
+    writer.send({ t: "push", k: "approval" });
+    await until(() => sa.got().length === 1, 10_000);
+    expect(sb.got()).toHaveLength(0);
+    // A turns push off in its settings.
+    pa.send({ t: "unsub", sub: { endpoint: sa.endpoint } });
+    await settle(300);
+    expect(await subs()).toEqual([]);
   });
 });
 

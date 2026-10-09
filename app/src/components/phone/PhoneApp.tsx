@@ -16,10 +16,13 @@ import {
   currentSubscription,
   isIos,
   isStandalone,
+  openedFor,
   pushSupported,
   registerWorker,
   subFrame,
   subscribe,
+  unsubFrame,
+  unsubscribeAll,
 } from "./push";
 import { RelayClient, type LinkState } from "./relay-client";
 import { acceptFrameAt, duration, elapsed, frameAt, money, parseSnapshot, resetWhen, type LimitView, type SessionView, type SnapshotView } from "./snapshot";
@@ -71,6 +74,7 @@ import {
   plusCaps,
   replyPayload,
   stopPayload,
+  syncPayload,
   taskInfoPayload,
   taskPayload,
   type ApprovalView,
@@ -93,6 +97,7 @@ import {
   deviceKind,
   featuredMiblo,
   installHint,
+  mergeApproval,
   notifyHelp,
   pendingApprovals,
   type AppTab,
@@ -254,6 +259,9 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     setPlus((all) => ({ ...all, [room]: fn(all[room] ?? emptyPlus()) }));
   }, []);
   const subRef = useRef<PushSubscription | null>(null);
+  /** Rooms whose connection opened since they last asked for the approvals still waiting. */
+  const syncDue = useRef(new Set<string>());
+  const [syncTick, setSyncTick] = useState(0);
   /** This device has passkeys (a user-verifying platform authenticator); null while unknown. */
   const [passkeys, setPasskeys] = useState<boolean | null>(null);
   /** v6: this phone and the account. */
@@ -600,7 +608,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       }
       void parseApproval(payload, Date.now()).then((a) => {
         if (!a) return;
-        updatePlus(p.room, (r) => (r.outcomes[a.id] ? r : { ...r, approvals: [...r.approvals.filter((x) => x.id !== a.id), a].slice(-10) }));
+        updatePlus(p.room, (r) => (r.outcomes[a.id] ? r : { ...r, approvals: mergeApproval(r.approvals, a, r.outcomes) }));
       });
     } else if (ch === "reply") {
       const ack = parseReplyAck(payload);
@@ -609,6 +617,28 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       if (tack) updatePlus(p.room, (r) => ({ ...r, taskAcks: { ...r.taskAcks, [tack.nonce]: tack } }));
     }
   }, [t, updatePlus, say]);
+
+  // The approvals still waiting on each computer, asked for when this phone's connection opens (the
+  // relay keeps none: a card sent while the app was closed or its socket was down would be lost)
+  // and when the app is unlocked. Only on Miblo+, from an enrolled phone, with the app open.
+  const lockOpen = lock.k === "open";
+  useEffect(() => {
+    if (lockOpen) for (const p of pairings ?? []) syncDue.current.add(p.room);
+  }, [lockOpen, pairings]);
+  useEffect(() => {
+    if (!lockOpen || !pairings) return;
+    for (const room of [...syncDue.current]) {
+      const p = pairings.find((x) => x.room === room);
+      if (!p) {
+        syncDue.current.delete(room);
+        continue;
+      }
+      const client = clients.current.get(room);
+      if (!p.phone || !plus[room]?.caps?.on || live[room]?.link !== "open" || !client) continue;
+      syncDue.current.delete(room);
+      void client.sendUp("approval", syncPayload(p.phone.id, Date.now()));
+    }
+  }, [lockOpen, pairings, plus, live, syncTick]);
 
   // One relay connection per paired computer.
   useEffect(() => {
@@ -629,6 +659,11 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       const client = new RelayClient(p, {
         onState: (link) => {
           setLive((l) => ({ ...l, [p.room]: { snap: l[p.room]?.snap ?? null, link } }));
+          if (link === "open") {
+            // A new connection may have missed approvals sent while it was away: ask for them.
+            syncDue.current.add(p.room);
+            setSyncTick((n) => n + 1);
+          }
           if (link === "open" && subRef.current) {
             // After the auth frame: tell the room where to send alerts.
             window.setTimeout(() => subRef.current && client.send(subFrame(subRef.current, lang)), 50);
@@ -789,6 +824,16 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     return ok;
   };
 
+  // Push off in the settings: every room drops this phone's subscription, then the browser's goes.
+  const disableAlerts = async () => {
+    setNotify("busy");
+    const sub = subRef.current ?? (await currentSubscription(lang).catch(() => null));
+    clients.current.forEach((c) => c.send(unsubFrame(sub)));
+    await unsubscribeAll(lang).catch(() => {});
+    subRef.current = null;
+    setNotify("default");
+  };
+
   const enableAlerts = async () => {
     setNotify("busy");
     try {
@@ -827,6 +872,17 @@ export function PhoneApp({ lang }: { lang: Locale }) {
     setTabState(next);
     window.scrollTo({ top: 0 });
   }, []);
+  // Opened from a notification (sw.js: ?open=approval, or a message when the app was open already):
+  // the "Agora" tab (where a fresh start is anyway), where the request or the session is; the
+  // address goes back to the app's own.
+  useEffect(() => {
+    if (openedFor(location.search)) history.replaceState(history.state, "", location.pathname + location.hash);
+    const onMessage = (e: MessageEvent) => {
+      if ((e.data as { t?: unknown } | null)?.t === "miblo-open") setTab("now");
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+  }, [setTab]);
   const openConversation = useCallback((id: string) => {
     history.pushState({ mibloSession: id }, "");
     setOpenSession(id);
@@ -1296,7 +1352,7 @@ export function PhoneApp({ lang }: { lang: Locale }) {
       <LockSettings lang={lang} lock={lock} />
 
       <Group title={t.notify.title} id="notify-title">
-        <AlertsBlock t={t} state={notify} device={device} hint={hint} onEnable={enableAlerts} onInstall={install} />
+        <AlertsBlock t={t} state={notify} device={device} hint={hint} ios={!!platform?.ios} onEnable={enableAlerts} onDisable={disableAlerts} onInstall={install} />
       </Group>
 
       {hint && hint !== "installed" && (
@@ -1623,26 +1679,22 @@ function AlertsBlock({
   state,
   device,
   hint,
+  ios,
   onEnable,
+  onDisable,
   onInstall,
 }: {
   t: PhoneStrings;
   state: NotifyState;
   device: DeviceKind | null;
   hint: InstallHint | null;
+  /** An iPhone or iPad: the note on iOS 16.4+ and the Home Screen goes with the switch. */
+  ios: boolean;
   onEnable: () => void;
+  onDisable: () => void;
   onInstall: () => void;
 }) {
   if (state === "unknown") return <p className="text-ink-2">{t.status.connecting}</p>;
-  if (state === "enabled")
-    return (
-      <p className="flex items-start gap-2 text-green-ink">
-        <span className={styles.okDot} aria-hidden="true">
-          <Icon name="check" size={14} />
-        </span>
-        <span>{t.notify.enabled}</span>
-      </p>
-    );
   if (state === "unsupported") return <p className="text-ink-2">{t.notify.unsupported}</p>;
   if (state === "ios-install")
     return (
@@ -1658,13 +1710,29 @@ function AlertsBlock({
         <Steps items={t.notify.deniedHow[device ? notifyHelp(device) : "other"]} />
       </>
     );
+  const on = state === "enabled";
   return (
     <>
-      <p className="text-ink-2">{t.notify.explain}</p>
-      <button type="button" className="btn btn-primary mt-3 w-full" onClick={onEnable} disabled={state === "busy"} aria-busy={state === "busy"}>
-        <Icon name="bell" size={20} />
-        {t.notify.enable}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        className={styles.switchRow}
+        onClick={on ? onDisable : onEnable}
+        disabled={state === "busy"}
+        aria-busy={state === "busy"}
+        data-testid="push-switch"
+      >
+        <span className="min-w-0 flex-1 text-left">
+          <span className="block font-bold">{t.notify.switchLabel}</span>
+          <span className="block text-[0.9rem] text-ink-2">{on ? t.notify.enabled : t.notify.off}</span>
+        </span>
+        <span className={styles.switchTrack} data-on={on ? "true" : undefined} aria-hidden="true">
+          <span className={styles.switchKnob} />
+        </span>
       </button>
+      <p className="mt-3 text-[0.95rem] text-ink-2">{t.notify.explain}</p>
+      {ios && <p className="mt-2 text-[0.9rem] text-ink-2">{t.notify.iosNote}</p>}
     </>
   );
 }
